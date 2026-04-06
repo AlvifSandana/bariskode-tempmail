@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+worker/dist/
+frontend/dist/
+mail-parser-wasm/pkg/
+mail-parser-wasm/target/
+
+# Environment & secrets
+.env
+.env.*
+*.local
+.wrangler/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+smtp_proxy_server/*.egg-info/
+
+# Rust
+mail-parser-wasm/Cargo.lock

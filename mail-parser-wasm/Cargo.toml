@@ -1,0 +1,26 @@
+[package]
+name = "mail-parser-wasm"
+version = "1.0.0"
+edition = "2021"
+authors = ["BarisKode"]
+description = "Rust WASM email parser for Cloudflare Workers"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2.99"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+mail-parser = "0.9.4"
+base64 = "0.22.1"
+js-sys = "0.3.77"
+
+[dependencies.web-sys]
+version = "0.3.77"
+features = []
+
+[profile.release]
+opt-level = "s"
+lto = true

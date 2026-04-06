@@ -1,0 +1,22 @@
+{
+  "name": "bariskode-tempmail",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted temporary email service on Cloudflare",
+  "scripts": {
+    "dev:worker": "pnpm --filter worker dev",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "build:worker": "pnpm --filter worker build",
+    "build:frontend": "pnpm --filter frontend build",
+    "build:wasm": "cd mail-parser-wasm && wasm-pack build --release --target bundler",
+    "deploy:worker": "pnpm --filter worker deploy",
+    "deploy:frontend": "pnpm --filter frontend deploy",
+    "db:migrate": "wrangler d1 execute temp-email-db --file=db/schema.sql",
+    "db:create": "wrangler d1 create temp-email-db",
+    "kv:create": "wrangler kv:namespace create KV",
+    "r2:create": "wrangler r2 bucket create temp-email-attachments"
+  },
+  "keywords": ["temp-mail", "cloudflare", "workers", "email"],
+  "author": "BarisKode",
+  "license": "MIT"
+}

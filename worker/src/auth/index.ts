@@ -10,6 +10,7 @@ import {
 import { parseCookieHeader, randomCsrfToken, validateCookieCsrf } from '../utils/csrf';
 import { checkRateLimit, RATE_LIMIT_PRESETS } from '../utils/rate_limit';
 import { isValidLoginEmail } from '../utils/user_auth';
+import { extractTurnstileToken, verifyTurnstileToken } from '../utils/turnstile';
 import type { AppBindings } from '../types/env';
 import type { User, UserJWT } from '../models/user';
 
@@ -497,6 +498,21 @@ app.post('/register', async (c) => {
     const email = String(body.email || '').trim().toLowerCase();
     const password = String(body.password || '');
 
+    if (String(c.env.TURNSTILE_SECRET || '').trim() !== '') {
+      const turnstileToken = extractTurnstileToken(body);
+      if (!turnstileToken) {
+        return c.json({ success: false, error: 'CAPTCHA_FAILED', message: 'Captcha verification required' }, 400);
+      }
+      const turnstile = await verifyTurnstileToken({
+        secret: c.env.TURNSTILE_SECRET,
+        token: turnstileToken,
+        remoteIp: ip,
+      });
+      if (!turnstile.success) {
+        return c.json({ success: false, error: 'CAPTCHA_FAILED', message: 'Captcha verification failed' }, 403);
+      }
+    }
+
     if (!isValidLoginEmail(email)) {
       return c.json({ success: false, error: 'INVALID_REQUEST', message: 'Invalid email format' }, 400);
     }
@@ -574,6 +590,21 @@ app.post('/login', async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const email = String(body.email || '').trim().toLowerCase();
     const password = String(body.password || '');
+
+    if (String(c.env.TURNSTILE_SECRET || '').trim() !== '') {
+      const turnstileToken = extractTurnstileToken(body);
+      if (!turnstileToken) {
+        return c.json({ success: false, error: 'CAPTCHA_FAILED', message: 'Captcha verification required' }, 400);
+      }
+      const turnstile = await verifyTurnstileToken({
+        secret: c.env.TURNSTILE_SECRET,
+        token: turnstileToken,
+        remoteIp: ip,
+      });
+      if (!turnstile.success) {
+        return c.json({ success: false, error: 'CAPTCHA_FAILED', message: 'Captcha verification failed' }, 403);
+      }
+    }
 
     if (!isValidLoginEmail(email) || !password) {
       return c.json({ success: false, error: 'INVALID_REQUEST', message: 'Email and password are required' }, 400);

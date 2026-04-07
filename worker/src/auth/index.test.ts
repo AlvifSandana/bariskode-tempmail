@@ -37,6 +37,134 @@ describe('auth routes smoke tests', () => {
     expect(json.success).toBe(false);
   });
 
+  it('requires turnstile token on register when configured', async () => {
+    const env = createBaseEnv({
+      TURNSTILE_SECRET: 'ts_secret',
+      DB: createMockDB({
+        first: () => null,
+        run: () => ({ meta: { last_row_id: 1, changes: 1 } }),
+      }),
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+      },
+      body: JSON.stringify({ email: 'user@example.com', password: 'password123' }),
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe('CAPTCHA_FAILED');
+  });
+
+  it('rejects register when turnstile verification fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: false }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const env = createBaseEnv({
+      TURNSTILE_SECRET: 'ts_secret',
+      DB: createMockDB({
+        first: () => null,
+        run: () => ({ meta: { last_row_id: 1, changes: 1 } }),
+      }),
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+      },
+      body: JSON.stringify({
+        email: 'user@example.com',
+        password: 'password123',
+        turnstile_token: 'ts_token',
+      }),
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe('CAPTCHA_FAILED');
+    vi.unstubAllGlobals();
+  });
+
+  it('requires turnstile token on login when configured', async () => {
+    const env = createBaseEnv({
+      TURNSTILE_SECRET: 'ts_secret',
+      DB: createMockDB({
+        first: () => null,
+        all: () => [],
+      }),
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+      },
+      body: JSON.stringify({ email: 'user@example.com', password: 'password123' }),
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe('CAPTCHA_FAILED');
+  });
+
+  it('allows login to continue when turnstile verification succeeds', async () => {
+    const passwordHash = await (await import('../utils/crypto')).hashPassword('password123');
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const env = createBaseEnv({
+      TURNSTILE_SECRET: 'ts_secret',
+      DB: createMockDB({
+        first: (sql) => {
+          if (sql.includes('FROM users WHERE user_email')) {
+            return {
+              id: 1,
+              user_email: 'user@example.com',
+              password: passwordHash,
+              created_at: '2025-01-01',
+              updated_at: '2025-01-01',
+            };
+          }
+          return null;
+        },
+        all: () => [{ role_text: 'default' }],
+      }),
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+      },
+      body: JSON.stringify({
+        email: 'user@example.com',
+        password: 'password123',
+        turnstile_token: 'ts_token',
+      }),
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
   it('rejects login for unknown user', async () => {
     const env = createBaseEnv({
       DB: createMockDB({

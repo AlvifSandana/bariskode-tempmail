@@ -7,17 +7,17 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 
 ## 🔴 Critical (MVP)
 
-- [ ] Setup Cloudflare D1, KV, R2, Email Routing
-- [ ] Implement Worker router dengan Hono
-- [ ] Email receiving handler (Email Routing → Worker)
+- [x] Setup Cloudflare D1, KV, R2, Email Routing
+- [x] Implement Worker router dengan Hono
+- [x] Email receiving handler (Email Routing → Worker)
 - [ ] Integrate Rust WASM mail parser
-- [ ] Simpan email ke D1 (mails table)
-- [ ] API: create address (random & custom)
-- [ ] API: list & get mails
-- [ ] API: delete mail
-- [ ] Frontend: create/display inbox
-- [ ] Frontend: render email HTML & plain text
-- [ ] JWT auth per-address
+- [x] Simpan email ke D1 (mails table)
+- [x] API: create address (random & custom)
+- [x] API: list & get mails
+- [x] API: delete mail
+- [x] Frontend: create/display inbox
+- [x] Frontend: render email HTML & plain text
+- [x] JWT auth per-address
 - [ ] Deploy worker & frontend
 
 ---
@@ -31,16 +31,16 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 - [x] Opsi hapus semua attachment (`REMOVE_ALL_ATTACHMENT`)
 - [x] Opsi hapus attachment melebihi ukuran tertentu (`REMOVE_EXCEED_SIZE_ATTACHMENT`)
 - [ ] Email sending via SMTP
-- [ ] Email sending via Resend API
+- [x] Email sending via Resend API
 - [ ] DKIM signing untuk email terkirim
-- [ ] Sent box (list & delete)
+- [x] Sent box (list & delete)
 
 ### Address
-- [ ] Multi-domain support (pilih domain saat create)
-- [ ] Custom address name (bisa di-disable via config)
-- [ ] Address password (`ENABLE_ADDRESS_PASSWORD`)
-- [ ] Batas panjang & karakter address name (lowercase + angka only)
-- [ ] Blacklist nama address (`address_name_blacklist`)
+- [x] Multi-domain support (pilih domain saat create)
+- [x] Custom address name (bisa di-disable via config)
+- [x] Address password (`ENABLE_ADDRESS_PASSWORD`)
+- [x] Batas panjang & karakter address name (lowercase + angka only)
+- [x] Blacklist nama address (`address_name_blacklist`)
 
 ### Auth & User
 - [x] User registration & login (email + password)
@@ -81,7 +81,7 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 - [ ] Source IP lookup link per address (ip.im integration)
 
 ### Security
-- [ ] CF Turnstile CAPTCHA integration
+- [x] CF Turnstile CAPTCHA integration (backend validation for `/api/new_address`, `/auth/register`, `/auth/login`)
 - [x] Rate limiting per IP (KV counter)
 - [ ] Access password (private site mode)
 - [x] XSS sanitization pada HTML email render
@@ -109,11 +109,11 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 - [ ] Dark mode styling untuk AI info section
 
 ### Notifications & Integrations
-- [ ] Telegram Bot setup & webhook handler
-- [ ] Telegram: create address command
-- [ ] Telegram: read inbox command
+- [x] Telegram Bot setup & webhook handler
+- [x] Telegram: create address command
+- [x] Telegram: read inbox command
 - [ ] Telegram: push notification saat email masuk
-- [ ] Telegram: language switch command (`/lang`)
+- [x] Telegram: language switch command (`/lang`)
 - [ ] Telegram Mini App
 - [ ] Webhook push ke external URL saat email masuk
 - [ ] Global forward address (forward semua email ke satu alamat)

@@ -39,6 +39,7 @@ import {
   ADDRESS_PASSWORD_MIN_LENGTH,
 } from '../constants';
 import type { AppBindings } from '../types/env';
+import { extractTurnstileToken, verifyTurnstileToken } from '../utils/turnstile';
 
 const app = new Hono<{ Bindings: AppBindings }>();
 const DUMMY_PASSWORD_HASH =
@@ -117,6 +118,37 @@ app.post('/new_address', async (c) => {
     // Parse request body
     const body = await c.req.json().catch(() => ({}));
     const { name, password, domain } = body;
+
+    if (String(c.env.TURNSTILE_SECRET || '').trim() !== '') {
+      const turnstileToken = extractTurnstileToken(body);
+      if (!turnstileToken) {
+        return c.json(
+          {
+            success: false,
+            error: ERROR_CODES.CAPTCHA_FAILED,
+            message: 'Captcha verification required',
+          },
+          HTTP_STATUS.BAD_REQUEST
+        );
+      }
+
+      const turnstile = await verifyTurnstileToken({
+        secret: c.env.TURNSTILE_SECRET,
+        token: turnstileToken,
+        remoteIp: ip,
+      });
+
+      if (!turnstile.success) {
+        return c.json(
+          {
+            success: false,
+            error: ERROR_CODES.CAPTCHA_FAILED,
+            message: 'Captcha verification failed',
+          },
+          HTTP_STATUS.FORBIDDEN
+        );
+      }
+    }
 
     // Determine address name
     let addressName: string;

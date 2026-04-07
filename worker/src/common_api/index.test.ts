@@ -51,6 +51,60 @@ describe('common api send_mail and address_auth', () => {
     expect(typeof json.data.token).toBe('string');
   });
 
+  it('requires turnstile token on new_address when configured', async () => {
+    const env = createBaseEnv({
+      TURNSTILE_SECRET: 'ts_secret',
+      DB: createMockDB({
+        first: () => null,
+        run: () => ({ meta: { last_row_id: 1, changes: 1 } }),
+      }),
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/new_address', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+      },
+      body: JSON.stringify({ name: 'demo123' }),
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toBe('CAPTCHA_FAILED');
+  });
+
+  it('rejects new_address when turnstile verification fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ success: false }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const env = createBaseEnv({
+      TURNSTILE_SECRET: 'ts_secret',
+      DB: createMockDB({
+        first: () => null,
+        run: () => ({ meta: { last_row_id: 1, changes: 1 } }),
+      }),
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/new_address', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+      },
+      body: JSON.stringify({ name: 'demo123', turnstile_token: 'ts_token' }),
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe('CAPTCHA_FAILED');
+    vi.unstubAllGlobals();
+  });
+
   it('rejects invalid address password', async () => {
     const passwordHash = await hashPassword('addr-pass');
     const env = createBaseEnv({

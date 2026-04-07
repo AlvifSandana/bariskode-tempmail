@@ -50,6 +50,7 @@ app.use('*', async (c, next) => {
 
 // Mount API routes
 app.route('/api', commonApi);
+app.route('/open_api', commonApi);
 app.route('/auth', authApi);
 app.route('/user_api', userApi);
 app.route('/admin_api', adminApi);

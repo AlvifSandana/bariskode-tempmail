@@ -30,8 +30,8 @@ Status implementasi terkini untuk Temp Email Service.
 
 ### Frontend
 - Main inbox view
-- Basic admin view placeholder
-- Basic user view placeholder
+- Admin panel with stats/address/user/settings/maintenance tabs
+- User panel with login/register, OAuth2 callback handling, passkey register/login, bind/unbind and cross-address mailbox
 - API/store foundation
 
 ### Security/Operations
@@ -40,6 +40,11 @@ Status implementasi terkini untuk Temp Email Service.
 - KV-based rate limiting
 - CORS allowlist via `APP_ORIGINS`
 - HMAC-signed outbound webhook delivery
+- User browser session via secure HttpOnly cookie `tm_user_session`
+- User auth middleware supports cookie session and `Authorization: Bearer` fallback
+- OAuth callback hardening: PKCE S256 + state + nonce binding (KV + cookie validation)
+- WebAuthn policy enforces UV (user verification) for registration and login assertion
+- Multiple `Set-Cookie` handling fixed with append behavior on auth flows
 - Production readiness documentation
 
 ### Testing
@@ -48,6 +53,12 @@ Status implementasi terkini untuk Temp Email Service.
 - Auth route and user-auth middleware baseline tests
 - Runtime hardening tests
 - Common API tests for address auth and send_mail
+
+### Recent Operational Fixes
+- `open_api` path alias now mounted and consistent with `/api`
+- `/admin_api/db_init` clarified as status-only with required/missing table output
+- `wrangler.toml` compatibility conflict resolved by keeping only `compatibility_flags = ["nodejs_compat"]`
+- Attachment flow now stores metadata + optional R2 object and applies size guard controls
 
 ---
 
@@ -60,11 +71,24 @@ Status implementasi terkini untuk Temp Email Service.
 - Depends on backend address JWT/password auth and limited send-mail capability
 
 ### Frontend Completeness
-- Admin and user views are still basic placeholders
-- No full production UI for all admin/user actions yet
+- Admin panel now includes stats, address/user management, settings, and maintenance workflows
+- User panel now includes login/register, OAuth callback handling, passkey workflows, bind/unbind, and cross-address mail listing
 
 ### Advanced Auth
-- OAuth2 / Passkey endpoints are still planned, not fully implemented
+- OAuth2 (Google) backend endpoints implemented with PKCE/state/nonce validation
+- Passkey backend endpoints implemented (user-account flow, UV required)
+
+### Frontend Auth Session
+- Auth/user requests use `credentials: 'include'`
+- User JWT no longer persisted in localStorage (email metadata optional only)
+- Session restore on page load via `/auth/refresh` probe
+- API/Auth base URL configurable via `VITE_API_BASE` and `VITE_AUTH_BASE`
+- `bind_address` now derives `address_id` from verified `address_token` (client no longer needs to send `address_id`)
+
+### Security Follow-up (Remaining)
+- CSRF defense-in-depth for cookie-based auth still needs explicit hardening layer (e.g., double-submit token/origin policy for state-changing endpoints)
+- Auth responses still include `token` in JSON for compatibility; optional removal/migration is pending
+- Dependency security audit cadence and remediation tracking still pending
 
 ---
 

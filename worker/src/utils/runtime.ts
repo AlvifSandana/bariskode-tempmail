@@ -43,6 +43,29 @@ export function validateRuntimeConfig(env: AppBindings): RuntimeValidationResult
     warnings.push('TELEGRAM_BOT_TOKEN is configured without TELEGRAM_BOT_WEBHOOK_SECRET; bot endpoint will reject requests');
   }
 
+  const currentlyUnused = [
+    'TURNSTILE_SECRET',
+    'SMTP_HOST',
+    'SMTP_PORT',
+    'SMTP_USERNAME',
+    'SMTP_PASSWORD',
+    'DKIM_PRIVATE_KEY',
+    'S3_REGION',
+    'S3_ENDPOINT',
+    'S3_ACCESS_KEY_ID',
+    'S3_SECRET_ACCESS_KEY',
+    'S3_BUCKET',
+  ] as const;
+
+  const enabledUnused = currentlyUnused.filter((key) => {
+    const value = env[key];
+    return value !== undefined && String(value).trim() !== '';
+  });
+
+  if (enabledUnused.length > 0) {
+    warnings.push(`Configured env vars not active yet: ${enabledUnused.join(', ')}`);
+  }
+
   return {
     valid: errors.length === 0,
     errors,

@@ -10,14 +10,17 @@ Layanan temporary email gratis yang bisa kamu host sendiri di atas Cloudflare. T
 - Terima email di alamat sementara di domain kamu sendiri
 - Parsing email saat ini masih MVP/heuristik; fondasi Rust WASM sudah disiapkan
 - Kirim email saat ini mendukung mode store-only dan Resend API (jika dikonfigurasi)
-- Attachment/inline image masih parsial di MVP
+- Attachment metadata + download endpoint sudah aktif; upload ke R2 didukung jika binding tersedia
+- Guard ukuran attachment aktif via `MAX_ATTACHMENT_SIZE` + `REMOVE_EXCEED_SIZE_ATTACHMENT`
 - Sent box untuk riwayat email terkirim
 
 ### 👤 User & Auth
 - Buat inbox tanpa login (anonymous + JWT credential)
 - Registrasi akun penuh, bind multiple alamat ke satu akun
-- OAuth2 masih planned
-- Passkey/WebAuthn masih planned
+- Sesi user browser memakai cookie HttpOnly `tm_user_session` (bukan simpan user JWT di localStorage)
+- Backend menerima cookie session token dan tetap menerima `Authorization: Bearer` sebagai fallback
+- OAuth2 Google flow tersedia (provider dikonfigurasi via `OAUTH2_PROVIDERS`) dengan PKCE S256 + state + nonce binding
+- Passkey flow tersedia untuk user account (challenge/register/login API) dengan user verification wajib (UV required)
 - Role-based access: tiap role punya domain & prefix berbeda
 
 ### 🤖 AI Extraction
@@ -34,7 +37,7 @@ Layanan temporary email gratis yang bisa kamu host sendiri di atas Cloudflare. T
 - Access password (private site mode)
 
 ### ⚙️ Admin Panel
-- Kelola address, user, domain, dan role
+- Kelola address, user, settings, cleanup, dan DB init status
 - Maintenance: cleanup otomatis (custom SQL dinonaktifkan demi keamanan MVP)
 - IP blacklist, announcement, konfigurasi AI
 
@@ -149,6 +152,11 @@ pnpm build
 wrangler pages deploy dist
 ```
 
+Untuk frontend auth/API base URL bisa diatur via environment variable Vite:
+
+- `VITE_API_BASE` (default: `/api`)
+- `VITE_AUTH_BASE` (default: `""`, same-origin)
+
 ### 8. Setup Email Routing
 
 Di Cloudflare Dashboard → Email → Email Routing → Routing Rules:
@@ -210,6 +218,13 @@ Di Cloudflare Dashboard → Email → Email Routing → Routing Rules:
 | `TELEGRAM_BOT_TOKEN` | ❌ | Telegram Bot token |
 | `WEBHOOK_URL` | ❌ | Webhook URL untuk notifikasi |
 | `FORWARD_ADDRESS_LIST` | ❌ | Comma-separated forward addresses |
+| `APP_ORIGINS` | ❌ | CORS allowlist origins (comma-separated) |
+| `REMOVE_ALL_ATTACHMENT` | ❌ | Hapus raw mail jika email memiliki attachment |
+| `REMOVE_EXCEED_SIZE_ATTACHMENT` | ❌ | Hapus raw mail jika attachment melebihi batas |
+| `MAX_ATTACHMENT_SIZE` | ❌ | Batas ukuran attachment (bytes) |
+| `OAUTH2_PROVIDERS` | ❌ | JSON config provider OAuth2 (Google) |
+| `VITE_API_BASE` | ❌ | Base URL API untuk frontend (Vite env) |
+| `VITE_AUTH_BASE` | ❌ | Base URL auth/user API untuk frontend (Vite env) |
 | `S3_ENDPOINT` | ❌ | S3-compatible endpoint (jika tidak pakai R2) |
 | `S3_ACCESS_KEY_ID` | ❌ | S3 access key |
 | `S3_SECRET_ACCESS_KEY` | ❌ | S3 secret key |
@@ -296,7 +311,7 @@ Semua SQL migration files ada di folder `db/`. Untuk apply migration baru:
 wrangler d1 execute temp-email-db --file=db/YYYY-MM-DD-description.sql
 ```
 
-Atau gunakan tombol **"DB Upgrade"** di Admin Panel → Maintenance.
+Catatan: endpoint `POST /admin_api/db_init` pada MVP hanya menampilkan status tabel. Migrasi schema tetap dilakukan manual via `wrangler d1 execute`.
 
 ---
 

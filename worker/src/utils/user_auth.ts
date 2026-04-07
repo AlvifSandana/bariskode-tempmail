@@ -14,7 +14,22 @@ export async function requireUserAuth(c: {
   set: (key: 'user', value: UserJWT) => void;
 }) {
   const authHeader = c.req.header('Authorization') ?? null;
-  const token = extractBearerToken(authHeader);
+  const bearer = extractBearerToken(authHeader);
+  const cookieHeader = c.req.header('Cookie') || '';
+  const tokenFromCookie = cookieHeader
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith('tm_user_session='))
+    ?.slice('tm_user_session='.length);
+  let cookieToken: string | null = null;
+  if (tokenFromCookie) {
+    try {
+      cookieToken = decodeURIComponent(tokenFromCookie);
+    } catch {
+      cookieToken = null;
+    }
+  }
+  const token = bearer || cookieToken;
 
   if (!token) {
     return c.json(

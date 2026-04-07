@@ -19,7 +19,7 @@
 │                  Cloudflare Workers (Backend)               │
 │  ┌──────────────┐  ┌────────────┐  ┌──────────────────────┐│
 │  │  /api/*      │  │ /user_api/*│  │ /admin_api/*         ││
-│  │  /open_api/* │  │ /auth/*    │  │ /telegram_api/*      ││
+│  │  /auth/*     │  │ /health    │  │ /telegram_api/*      ││
 │  └──────────────┘  └────────────┘  └──────────────────────┘│
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │  Email Handler (Email Routing → Worker)              │   │
@@ -45,7 +45,7 @@ project-root/
 │   ├── src/
 │   │   ├── worker.ts          # Entry point, router setup (Hono)
 │   │   ├── common_api/        # Public unauthenticated endpoints
-│   │   ├── open_api/          # Open API (no auth required)
+│   │   ├── /open_api alias -> common_api (implemented)
 │   │   ├── user_api/          # Authenticated user endpoints
 │   │   ├── admin_api/         # Admin-only endpoints
 │   │   ├── telegram_api/      # Telegram Bot webhook handler
@@ -207,13 +207,13 @@ CREATE TABLE attachments (
 
 ## 4. Worker API Endpoints
 
-### 4.1 Common / Open API (`/api`, `/open_api`)
+### 4.1 Common API (`/api`)
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/settings` | Get public settings (domains, announcements) |
-| GET | `/api/new_address` | Create new random address |
-| POST | `/api/new_address` | Create address with custom name |
+| POST | `/api/new_address` | Create address (random/custom) |
+| POST | `/api/address_auth` | Authenticate address + password |
 | GET | `/api/mails` | List mails for address (JWT auth) |
 | GET | `/api/mails/:id` | Get mail detail |
 | DELETE | `/api/mails/:id` | Delete mail |
@@ -227,12 +227,17 @@ CREATE TABLE attachments (
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/auth/register` | Register new user account |
-| POST | `/auth/login` | Login with email+password |
-| POST | `/auth/oauth2/:provider` | OAuth2 login (github, authentik) |
-| POST | `/auth/passkey/register` | Register WebAuthn credential |
-| POST | `/auth/passkey/login` | Authenticate with Passkey |
-| POST | `/auth/refresh` | Refresh JWT token |
+| POST | `/auth/register` | Register new user account, set `tm_user_session` cookie |
+| POST | `/auth/login` | Login with email+password, set `tm_user_session` cookie |
+| GET | `/auth/oauth2/providers` | List configured OAuth2 providers |
+| GET | `/auth/oauth2/:provider/start` | Start OAuth2 flow (returns auth URL + state; PKCE S256 + nonce cookie) |
+| GET/POST | `/auth/oauth2/:provider/callback` | OAuth2 callback exchange, validate state/nonce/verifier, set session cookie |
+| POST | `/auth/passkey/register/challenge` | Generate passkey registration challenge (requires user session) |
+| POST | `/auth/passkey/register/complete` | Verify registration signature and store credential |
+| POST | `/auth/passkey/login/challenge` | Generate passkey login challenge |
+| POST | `/auth/passkey/login/complete` | Verify passkey assertion and set session cookie |
+| POST | `/auth/refresh` | Refresh user session token (cookie-based; bearer fallback supported) |
+| POST | `/auth/logout` | Clear `tm_user_session` cookie |
 
 ### 4.3 User API (`/user_api`)
 
@@ -240,7 +245,7 @@ CREATE TABLE attachments (
 |---|---|---|
 | GET | `/user_api/profile` | Get user profile |
 | GET | `/user_api/addresses` | List bound addresses |
-| POST | `/user_api/bind_address` | Bind address to account |
+| POST | `/user_api/bind_address` | Bind address to account via `address_token` (derive `address_id` from token) |
 | DELETE | `/user_api/unbind_address` | Unbind address |
 | GET | `/user_api/mails` | All mails across bound addresses |
 
@@ -256,7 +261,7 @@ CREATE TABLE attachments (
 | GET | `/admin_api/mails` | List all mails (across all addresses) |
 | POST | `/admin_api/settings` | Update settings |
 | POST | `/admin_api/cleanup` | Trigger manual cleanup |
-| POST | `/admin_api/db_init` | Run DB migrations |
+| POST | `/admin_api/db_init` | DB schema status check (manual migration hint) |
 | GET | `/admin_api/ip_blacklist` | Get IP blacklist |
 | POST | `/admin_api/ip_blacklist` | Update IP blacklist |
 
@@ -273,8 +278,8 @@ CREATE TABLE attachments (
 ```toml
 name = "temp-email-worker"
 main = "src/worker.ts"
-compatibility_date = "2024-01-01"
-node_compat = true
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
 
 [[d1_databases]]
 binding = "DB"
@@ -356,9 +361,15 @@ OAUTH2_PROVIDERS = '[]'
 ### 6.3 State (Pinia Stores)
 
 - `useMailStore` — current address, inbox list, pagination
-- `useUserStore` — user profile, bound addresses, JWT token
+- `useUserStore` — user profile, bound addresses, session restored via `/auth/refresh` probe
 - `useSettingsStore` — domains, announcement, feature flags
 - `useAdminStore` — admin session, address/user lists
+
+Frontend auth client behavior:
+- `fetch` for auth/user endpoints uses `credentials: 'include'`
+- User JWT is not persisted in localStorage (only optional user email metadata)
+- Address JWT (temporary inbox credential) remains localStorage-based for `/api/*` address flow
+- Base URLs configurable via `VITE_API_BASE` and `VITE_AUTH_BASE`
 
 ### 6.4 i18n Keys (minimum)
 - `en`, `zh-CN`, `id` (Indonesia) locale files
@@ -436,24 +447,43 @@ TLS_KEY_FILE=/certs/key.pem
 - Secret: `JWT_SECRET` env var
 - Expiry: configurable, auto-refresh jika < 7 hari
 
-### 9.2 Admin Auth
+### 9.2 User Session Transport
+- Browser flow uses secure HttpOnly cookie `tm_user_session` (`Secure`, `SameSite=Lax`, `Path=/`)
+- User auth middleware accepts cookie token and still accepts `Authorization: Bearer` fallback
+- Auth endpoints that issue/refresh/login also set cookie; logout clears cookie
+- Current responses masih mengembalikan `token` di JSON untuk kompatibilitas klien
+
+### 9.3 Admin Auth
 - `ADMIN_PASSWORDS` env var (comma-separated)
 - Dikirim via `Authorization: Bearer <password>` header
 - Tidak ada session — stateless check setiap request
 
-### 9.3 Address Password
+### 9.4 Address Password
 - Hash dengan bcrypt sebelum disimpan di D1
 - Enabled via `ENABLE_ADDRESS_PASSWORD=true`
 - Digunakan juga sebagai IMAP/SMTP proxy credential
 
-### 9.4 Rate Limiting
+### 9.5 OAuth2 Security
+- OAuth start menyimpan state + code verifier di KV (TTL)
+- PKCE method: `S256`
+- Nonce browser session di-cookie-kan (`tm_oauth_nonce`) dan divalidasi saat callback
+- State key dihapus setelah dipakai (one-time)
+
+### 9.6 WebAuthn / Passkey
+- Registration dan assertion mewajibkan UV (user verification)
+- Verifikasi RP ID hash, origin allowlist (`APP_ORIGINS`), challenge binding, signature, dan sign counter replay
+
+### 9.7 Rate Limiting
 - Per-IP counter di KV
 - Configurable threshold per endpoint group
 - IP blacklist di settings table
 
-### 9.5 XSS Protection
+### 9.8 XSS Protection
 - HTML email dirender di dalam `<iframe>` sandbox atau shadow DOM
 - DOMPurify sanitization sebelum render
+
+### 9.9 Cookie Header Handling
+- Multi `Set-Cookie` pada auth flow dikirim dengan append behavior agar cookie tidak saling overwrite
 
 ---
 

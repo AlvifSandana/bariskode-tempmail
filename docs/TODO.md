@@ -25,11 +25,11 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 ## 🟠 High Priority (Core Features)
 
 ### Email
-- [ ] Attachment support (simpan ke D1 atau R2)
-- [ ] Download attachment dari frontend
+- [x] Attachment support (metadata + R2 upload when configured)
+- [x] Download attachment dari frontend
 - [ ] Inline image display untuk attachment gambar
-- [ ] Opsi hapus semua attachment (`REMOVE_ALL_ATTACHMENT`)
-- [ ] Opsi hapus attachment melebihi ukuran tertentu (`REMOVE_EXCEED_SIZE_ATTACHMENT`)
+- [x] Opsi hapus semua attachment (`REMOVE_ALL_ATTACHMENT`)
+- [x] Opsi hapus attachment melebihi ukuran tertentu (`REMOVE_EXCEED_SIZE_ATTACHMENT`)
 - [ ] Email sending via SMTP
 - [ ] Email sending via Resend API
 - [ ] DKIM signing untuk email terkirim
@@ -43,13 +43,17 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 - [ ] Blacklist nama address (`address_name_blacklist`)
 
 ### Auth & User
-- [ ] User registration & login (email + password)
-- [ ] Bind address ke user account
+- [x] User registration & login (email + password)
+- [x] Bind address ke user account
 - [ ] Switch antar bound addresses
-- [ ] Auto-refresh JWT (< 7 hari expiry)
+- [x] Auto-refresh JWT (< 7 hari expiry)
 - [ ] OAuth2 login: GitHub
 - [ ] OAuth2 login: Authentik (generic OIDC)
-- [ ] Passkey / WebAuthn register & login
+- [x] OAuth2 login: Google (PKCE S256 + state + nonce binding)
+- [x] Session cookie browser flow (`tm_user_session`) + bearer fallback di backend
+- [x] Logout endpoint clear session cookie
+- [x] Passkey / WebAuthn register & login (UV required)
+- [x] `bind_address` derive `address_id` dari `address_token` (client tidak kirim `address_id`)
 - [ ] URL JWT parameter untuk auto-login
 - [ ] User role system (beda domain & prefix per role)
 - [ ] Per-role limit binding address count
@@ -59,29 +63,32 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 ## 🟡 Medium Priority
 
 ### Admin Panel
-- [ ] Admin auth (password via env var)
-- [ ] Dashboard: address count, mail count, system status
-- [ ] Address list: paginated, search, delete single/bulk
+- [x] Admin auth (password via env var)
+- [x] Dashboard: address count, mail count, system status
+- [x] Address list: paginated, search, delete single
 - [ ] Create address without prefix (admin privilege)
-- [ ] User list: search by address/keyword, bulk operations
+- [x] User list: search by address/keyword, bulk operations
 - [ ] Bulk delete / clear inbox / clear sent per user
 - [ ] Domain & role configuration UI
-- [ ] Announcement banner configuration
+- [x] Announcement banner configuration
 - [ ] Blacklist/whitelist pengirim configuration
-- [ ] IP blacklist management
-- [ ] Maintenance: cleanup emails > N days
-- [ ] Maintenance: cleanup empty addresses
-- [ ] Maintenance: cleanup unbound addresses
+- [x] IP blacklist management
+- [x] Maintenance: cleanup emails > N days
+- [x] Maintenance: cleanup empty addresses
+- [x] Maintenance: cleanup unbound addresses
 - [ ] Custom SQL cleanup (admin-defined, scheduled or manual)
-- [ ] DB migration / upgrade button di panel
+- [x] DB init status check di panel (migration tetap manual)
 - [ ] Source IP lookup link per address (ip.im integration)
 
 ### Security
 - [ ] CF Turnstile CAPTCHA integration
-- [ ] Rate limiting per IP (KV counter)
+- [x] Rate limiting per IP (KV counter)
 - [ ] Access password (private site mode)
-- [ ] XSS sanitization pada HTML email render
+- [x] XSS sanitization pada HTML email render
 - [ ] Shadow DOM isolation untuk embed mode
+- [ ] CSRF defense-in-depth untuk cookie-based auth (double-submit token/origin policy)
+- [ ] Evaluasi hapus `token` dari JSON auth response (setelah migrasi klien aman)
+- [ ] Dependency security audit rutin + tracking remediation
 
 ### Spam
 - [ ] Spam detection (basic: header check)
@@ -140,8 +147,8 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 - [ ] Cocok untuk receive isolation scenario
 
 ### Observability
-- [ ] Health check endpoint
-- [ ] Scheduled cleanup task (Cloudflare Cron Triggers)
+- [x] Health check endpoint
+- [x] Scheduled cleanup task (Cloudflare Cron Triggers)
 - [ ] E2E test: API health, address lifecycle, SMTP send, inbox UI
 
 ---

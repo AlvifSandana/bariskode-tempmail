@@ -86,7 +86,7 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
   - [ ] Init Hono app
   - [ ] Setup CORS middleware
   - [ ] Setup auth middleware (JWT validation)
-  - [ ] Mount route groups: `/api`, `/open_api`, `/user_api`, `/admin_api`, `/telegram_api`
+  - [ ] Mount route groups: `/api`, `/auth`, `/user_api`, `/admin_api`, `/telegram_api`
   - [ ] Register email handler (`email` export untuk Email Routing)
   - [ ] Register scheduled handler (Cron Triggers)
 
@@ -119,6 +119,7 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
 ### Common API (`common_api/`)
 - [ ] `GET /api/settings` — return domains, announcement, feature flags
 - [ ] `POST /api/new_address` — create address (random atau custom)
+ - [ ] `POST /api/address_auth` — verify address password & issue address JWT
   - [ ] Validasi nama: lowercase + angka only
   - [ ] Cek blacklist nama
   - [ ] Cek CAPTCHA (jika Turnstile dikonfigurasi)
@@ -146,20 +147,21 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
 ## PHASE 4 — Worker Backend (Auth & User)
 
 ### Auth Routes (`auth/`)
-- [ ] `POST /auth/register` — hash password, insert ke `users`, return JWT
-- [ ] `POST /auth/login` — verify password, return JWT user
-- [ ] `POST /auth/refresh` — refresh JWT jika valid & < 7 hari
+- [x] `POST /auth/register` — hash password, insert ke `users`, return JWT + set cookie session `tm_user_session`
+- [x] `POST /auth/login` — verify password, return JWT user + set cookie session `tm_user_session`
+- [x] `POST /auth/refresh` — refresh JWT jika valid & < 7 hari, set/update cookie session
 - [ ] `POST /auth/oauth2/github` — exchange code → get user info → upsert user → JWT
-- [ ] `POST /auth/oauth2/:provider` — generic OIDC/OAuth2 flow
-- [ ] `POST /auth/passkey/register/begin` — generate WebAuthn challenge
-- [ ] `POST /auth/passkey/register/complete` — verify & store credential
-- [ ] `POST /auth/passkey/login/begin` — generate assertion challenge
-- [ ] `POST /auth/passkey/login/complete` — verify assertion → JWT
+ - [x] `GET /auth/oauth2/providers` + `GET /auth/oauth2/:provider/start` + callback endpoint (PKCE S256 + state + nonce)
+ - [x] `POST /auth/passkey/register/challenge`
+ - [x] `POST /auth/passkey/register/complete`
+ - [x] `POST /auth/passkey/login/challenge`
+  - [x] `POST /auth/passkey/login/complete` (UV required)
+ - [x] `POST /auth/logout` — clear cookie session
 
 ### User API (`user_api/`)
 - [ ] `GET /user_api/profile` — return user info + roles
 - [ ] `GET /user_api/addresses` — list bound addresses
-- [ ] `POST /user_api/bind_address` — bind address ke user (cek limit per role)
+- [x] `POST /user_api/bind_address` — bind address ke user via `address_token` (derive `address_id` server-side)
 - [ ] `DELETE /user_api/unbind_address` — unbind address
 - [ ] `GET /user_api/mails` — list semua mail dari bound addresses (filter by address & keyword)
 
@@ -184,7 +186,7 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
 - [ ] `POST /admin_api/settings` — update settings (announcement, blacklist, whitelist, roles, domains, etc.)
 - [ ] `POST /admin_api/ip_blacklist` — update IP blacklist
 - [ ] `POST /admin_api/cleanup` — trigger cleanup (by age, empty, unbound, custom SQL)
-- [ ] `POST /admin_api/db_init` — run pending DB migrations
+- [x] `POST /admin_api/db_init` — show current DB initialization status (migrations remain manual in MVP)
 - [ ] `GET /admin_api/stats` — basic stats (address count, mail count)
 
 ### Scheduled Tasks (Cron Triggers)
@@ -212,6 +214,10 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
 - [ ] `api/auth.ts` — register, login, refresh, oauth2, passkey
 - [ ] `api/user.ts` — profile, addresses, bindAddress, allMails
 - [ ] `api/admin.ts` — admin CRUD operations
+- [x] Auth/user request uses `credentials: 'include'`
+- [x] User JWT tidak disimpan di localStorage (hanya metadata email opsional)
+- [x] Session restore saat page load via `/auth/refresh`
+- [x] Frontend base URL configurable: `VITE_API_BASE`, `VITE_AUTH_BASE`
 
 ### Main Inbox (`/`)
 - [ ] `IndexView.vue`:
@@ -234,8 +240,8 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
 
 ### User Panel (`/user`)
 - [ ] Login / Register form
-- [ ] OAuth2 login buttons (GitHub, dll.)
-- [ ] Passkey login button
+- [x] OAuth2 login button (Google)
+- [x] Passkey login button
 - [ ] Profile display
 - [ ] Bound addresses list
 - [ ] Bind / unbind address
@@ -243,20 +249,12 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
 - [ ] All mails view (across all bound addresses)
 
 ### Admin Panel (`/admin`)
-- [ ] Admin login form
-- [ ] Dashboard: stats cards
-- [ ] Address management table (search, delete, bulk ops, create)
-- [ ] User management table (search, delete, bulk ops)
-- [ ] Settings form:
-  - [ ] Announcement
-  - [ ] Blacklist / whitelist
-  - [ ] Domain & role config
-  - [ ] AI extraction whitelist
-  - [ ] IP blacklist
-- [ ] Maintenance panel:
-  - [ ] Cleanup buttons (email age, empty, unbound)
-  - [ ] Custom SQL cleanup input
-  - [ ] DB upgrade button
+- [x] Admin login form
+- [x] Dashboard: stats cards
+- [x] Address management table (search, delete, create)
+- [x] User management table (search, delete, bulk clear inbox/sent)
+- [x] Settings form (announcement, default domains, address blacklist, ip blacklist)
+- [x] Maintenance panel (cleanup buttons, DB status check)
 
 ### UI Polish
 - [ ] Responsive layout (mobile-friendly)
@@ -350,6 +348,8 @@ Ikuti urutan phase ini agar setiap layer bisa di-test secara independen.
 - [ ] XSS test: kirim email dengan `<script>` tag
 - [ ] Rate limit test: hit endpoint berulang kali cepat
 - [ ] CAPTCHA validation test (jika Turnstile dikonfigurasi)
+- [ ] CSRF defense-in-depth checks untuk endpoint cookie-auth state-changing
+- [ ] Verifikasi multi `Set-Cookie` tidak overwrite di flow OAuth callback + session set
 
 ---
 

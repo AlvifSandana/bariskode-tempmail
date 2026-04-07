@@ -36,8 +36,21 @@ describe('runtime config', () => {
     const result = validateRuntimeConfig(
       createBaseEnv({
         APP_ORIGINS: 'https://mail.example.com',
+        OAUTH2_PROVIDERS: '',
       })
     );
     expect(result.valid).toBe(true);
+  });
+
+  it('warns when unused env vars are configured', () => {
+    const result = validateRuntimeConfig(
+      createBaseEnv({
+        APP_ORIGINS: 'https://mail.example.com',
+        SMTP_HOST: 'smtp.example.com',
+      })
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.warnings.some((warning) => warning.includes('Configured env vars not active yet'))).toBe(true);
   });
 });

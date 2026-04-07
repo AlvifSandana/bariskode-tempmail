@@ -41,6 +41,17 @@ import {
 import type { AppBindings } from '../types/env';
 
 const app = new Hono<{ Bindings: AppBindings }>();
+const DUMMY_PASSWORD_HASH =
+  '70f6bfd56651d62b5f461ef8d93f2eefab0b8e027fac636f69ca6af89ee15f98:5f420f67f25f84f1f3dbaa07a6deaf770915065658c42272615d08e1ebf31f0d4f63ecf274c6fd44f10e9fd77ef696d7edce6ea9786806d83a7bfd7f0f37e659';
+
+interface SendboxMail {
+  id: number;
+  address: string;
+  subject: string | null;
+  sender: string | null;
+  recipient: string;
+  created_at: string;
+}
 
 // ==================== GET /api/settings ====================
 app.get('/settings', async (c) => {
@@ -256,6 +267,108 @@ app.post('/new_address', async (c) => {
   }
 });
 
+// ==================== POST /api/address_auth ====================
+app.post('/address_auth', async (c) => {
+  try {
+    const ip = c.req.header('CF-Connecting-IP') || 'unknown';
+
+    const body = await c.req.json().catch(() => ({}));
+    const address = String(body.address || '').trim().toLowerCase();
+    const password = String(body.password || '');
+
+    const rateLimitResult = await checkRateLimit(
+      c.env.KV,
+      `${ip}:${address || 'unknown'}`,
+      RATE_LIMIT_PRESETS.ADDRESS_AUTH
+    );
+    if (!rateLimitResult.allowed) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.RATE_LIMITED,
+          message: 'Too many authentication attempts. Please try again later.',
+          retry_after: rateLimitResult.retryAfter,
+        },
+        HTTP_STATUS.TOO_MANY_REQUESTS
+      );
+    }
+
+    if (!address || !password) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.INVALID_REQUEST,
+          message: 'address and password are required',
+        },
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+
+    const addressValidation = validateAddress(address);
+    if (!addressValidation.valid) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.INVALID_REQUEST,
+          message: 'Invalid address format',
+        },
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+
+    const existingAddress = await queryOne<Address>(
+      c.env.DB,
+      'SELECT * FROM address WHERE name = ?',
+      [address]
+    );
+
+    if (!existingAddress || !existingAddress.password) {
+      await verifyPassword(password, DUMMY_PASSWORD_HASH);
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Invalid credentials',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const validPassword = await verifyPassword(password, existingAddress.password);
+    if (!validPassword) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Invalid credentials',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const token = await signAddressJWT(existingAddress.id, existingAddress.name, c.env);
+
+    return c.json({
+      success: true,
+      data: {
+        id: existingAddress.id,
+        address: existingAddress.name,
+        token,
+      },
+    });
+  } catch (error) {
+    console.error('[API] address_auth error:', error);
+    return c.json(
+      {
+        success: false,
+        error: ERROR_CODES.INTERNAL_ERROR,
+        message: 'Address authentication failed',
+      },
+      HTTP_STATUS.INTERNAL_ERROR
+    );
+  }
+});
+
 // ==================== GET /api/mails ====================
 app.get('/mails', async (c) => {
   try {
@@ -430,7 +543,7 @@ app.get('/mails/:id', async (c) => {
     // Get attachments
     const attachments = await query<AttachmentMeta>(
       c.env.DB,
-      'SELECT id, filename, size, content_type, content_id, is_inline FROM attachments WHERE mail_id = ?',
+      'SELECT id, filename, storage_key, size, content_type, content_id, is_inline FROM attachments WHERE mail_id = ?',
       [mailId]
     );
 
@@ -473,6 +586,120 @@ app.get('/mails/:id', async (c) => {
         success: false,
         error: ERROR_CODES.INTERNAL_ERROR,
         message: 'Failed to fetch mail',
+      },
+      HTTP_STATUS.INTERNAL_ERROR
+    );
+  }
+});
+
+// ==================== GET /api/mails/:id/attachment/:attachId ====================
+app.get('/mails/:id/attachment/:attachId', async (c) => {
+  try {
+    const mailId = parseInt(c.req.param('id'), 10);
+    const attachId = parseInt(c.req.param('attachId'), 10);
+    if (isNaN(mailId) || isNaN(attachId)) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.INVALID_REQUEST,
+          message: 'Invalid mail or attachment ID',
+        },
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+
+    const authHeader = c.req.header('Authorization');
+    const token = extractBearerToken(authHeader);
+
+    if (!token) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Authorization required',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const payload = await verifyJWT<AddressJWT>(token, c.env);
+    if (!payload || payload.type !== 'address') {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Invalid token',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const attachment = await queryOne<AttachmentMeta & { storage_key: string | null }>(
+      c.env.DB,
+      `SELECT a.id, a.mail_id, a.filename, a.storage_key, a.size, a.content_type, a.content_id, a.is_inline
+       FROM attachments a
+       JOIN mails m ON m.id = a.mail_id
+       WHERE a.mail_id = ? AND a.id = ? AND m.address = ?`,
+      [mailId, attachId, payload.address]
+    );
+
+    if (!attachment) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.NOT_FOUND,
+          message: 'Attachment not found',
+        },
+        HTTP_STATUS.NOT_FOUND
+      );
+    }
+
+    if (!attachment.storage_key || !c.env.R2) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.NOT_FOUND,
+          message: 'Attachment content is unavailable',
+        },
+        HTTP_STATUS.NOT_FOUND
+      );
+    }
+
+    const object = await c.env.R2.get(attachment.storage_key);
+    if (!object) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.NOT_FOUND,
+          message: 'Attachment file not found',
+        },
+        HTTP_STATUS.NOT_FOUND
+      );
+    }
+
+    const headers = new Headers();
+    headers.set('Content-Type', attachment.content_type || 'application/octet-stream');
+    headers.set('X-Content-Type-Options', 'nosniff');
+    headers.set('Cache-Control', 'private, no-store');
+    headers.set('Pragma', 'no-cache');
+
+    const safeFileName = (attachment.filename || `attachment-${attachment.id}`)
+      .replace(/[\r\n\x00-\x1F\x7F]/g, '')
+      .replace(/"/g, '')
+      .slice(0, 255) || `attachment-${attachment.id}`;
+    headers.set(
+      'Content-Disposition',
+      `attachment; filename="${safeFileName}"`
+    );
+
+    return new Response(object.body, { headers });
+  } catch (error) {
+    console.error('[API] attachment download error:', error);
+    return c.json(
+      {
+        success: false,
+        error: ERROR_CODES.INTERNAL_ERROR,
+        message: 'Failed to download attachment',
       },
       HTTP_STATUS.INTERNAL_ERROR
     );
@@ -719,6 +946,143 @@ app.post('/send_mail', async (c) => {
     console.error('[API] send_mail error:', error);
     return c.json(
       { success: false, error: ERROR_CODES.INTERNAL_ERROR, message: 'Failed to send mail' },
+      HTTP_STATUS.INTERNAL_ERROR
+    );
+  }
+});
+
+// ==================== GET /api/sendbox ====================
+app.get('/sendbox', async (c) => {
+  try {
+    const authHeader = c.req.header('Authorization');
+    const token = extractBearerToken(authHeader);
+
+    if (!token) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Authorization required',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const payload = await verifyJWT<AddressJWT>(token, c.env);
+    if (!payload || payload.type !== 'address') {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Invalid token',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const page = Math.max(1, parseInt(c.req.query('page') || '1', 10) || 1);
+    const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') || String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE));
+    const offset = (page - 1) * limit;
+
+    const total = await count(c.env.DB, 'sendbox', 'address = ?', [payload.address]);
+    const sendbox = await query<SendboxMail>(
+      c.env.DB,
+      `SELECT id, address, subject, sender, recipient, created_at
+       FROM sendbox
+       WHERE address = ?
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      [payload.address, limit, offset]
+    );
+
+    return c.json({
+      success: true,
+      data: {
+        sendbox,
+        pagination: {
+          page,
+          limit,
+          total,
+          total_pages: Math.ceil(total / limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error('[API] sendbox error:', error);
+    return c.json(
+      {
+        success: false,
+        error: ERROR_CODES.INTERNAL_ERROR,
+        message: 'Failed to fetch sendbox',
+      },
+      HTTP_STATUS.INTERNAL_ERROR
+    );
+  }
+});
+
+// ==================== DELETE /api/sendbox/:id ====================
+app.delete('/sendbox/:id', async (c) => {
+  try {
+    const sendId = parseInt(c.req.param('id'), 10);
+    if (isNaN(sendId)) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.INVALID_REQUEST,
+          message: 'Invalid sendbox ID',
+        },
+        HTTP_STATUS.BAD_REQUEST
+      );
+    }
+
+    const authHeader = c.req.header('Authorization');
+    const token = extractBearerToken(authHeader);
+
+    if (!token) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Authorization required',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const payload = await verifyJWT<AddressJWT>(token, c.env);
+    if (!payload || payload.type !== 'address') {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.UNAUTHORIZED,
+          message: 'Invalid token',
+        },
+        HTTP_STATUS.UNAUTHORIZED
+      );
+    }
+
+    const deleted = await deleteRows(c.env.DB, 'sendbox', 'id = ? AND address = ?', [sendId, payload.address]);
+
+    if (!deleted) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.NOT_FOUND,
+          message: 'Sendbox mail not found',
+        },
+        HTTP_STATUS.NOT_FOUND
+      );
+    }
+
+    return c.json({ success: true, data: { deleted } });
+  } catch (error) {
+    console.error('[API] delete sendbox error:', error);
+    return c.json(
+      {
+        success: false,
+        error: ERROR_CODES.INTERNAL_ERROR,
+        message: 'Failed to delete sendbox mail',
+      },
       HTTP_STATUS.INTERNAL_ERROR
     );
   }

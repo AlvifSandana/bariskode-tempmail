@@ -72,15 +72,19 @@ app.post('/bind_address', async (c) => {
     }
 
     const body = await c.req.json().catch(() => ({}));
-    const addressId = Number(body.address_id || 0);
     const addressToken = String(body.address_token || '');
 
-    if (!addressId || !addressToken) {
-      return c.json({ success: false, error: 'INVALID_REQUEST', message: 'address_id and address_token are required' }, 400);
+    if (!addressToken) {
+      return c.json({ success: false, error: 'INVALID_REQUEST', message: 'address_token is required' }, 400);
     }
 
     const addressPayload = await verifyJWT<AddressJWT>(addressToken, c.env);
-    if (!addressPayload || addressPayload.type !== 'address' || addressPayload.address_id !== addressId) {
+    if (!addressPayload || addressPayload.type !== 'address') {
+      return c.json({ success: false, error: 'UNAUTHORIZED', message: 'Invalid address token' }, 401);
+    }
+
+    const addressId = Number(addressPayload.address_id || 0);
+    if (!addressId) {
       return c.json({ success: false, error: 'UNAUTHORIZED', message: 'Invalid address token' }, 401);
     }
 

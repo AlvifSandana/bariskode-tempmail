@@ -153,6 +153,13 @@ export const RATE_LIMIT_PRESETS = {
     maxRequests: 10,
     keyPrefix: 'auth',
   },
+
+  // For address password auth endpoint
+  ADDRESS_AUTH: {
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    maxRequests: 10,
+    keyPrefix: 'address_auth',
+  },
 } as const;
 
 /**

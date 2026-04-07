@@ -222,4 +222,199 @@ describe('auth routes smoke tests', () => {
     expect(json.data.user.roles).toEqual(['default', 'vip']);
     expect(typeof json.data.refreshed).toBe('boolean');
   });
+
+  it('starts oauth and sets nonce cookie', async () => {
+    const env = createBaseEnv({
+      KV: createMockKV(),
+      OAUTH2_PROVIDERS: JSON.stringify([
+        {
+          name: 'google',
+          client_id: 'cid',
+          client_secret: 'csecret',
+          redirect_uri: 'http://localhost:5173/user',
+        },
+      ]),
+    });
+
+    const res = await authApp.fetch(new Request('http://localhost/oauth2/google/start'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('set-cookie') || '').toContain('tm_oauth_nonce=');
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.provider).toBe('google');
+    expect(String(json.data.auth_url)).toContain('state=');
+  });
+
+  it('rejects oauth callback when cookie nonce is missing', async () => {
+    const state = 'state-abc';
+    const env = createBaseEnv({
+      KV: createMockKV({
+        [`oauth:state:${state}`]: JSON.stringify({ provider: 'google', session_nonce: 'nonce-1', code_verifier: 'verifier-1' }),
+      }),
+      OAUTH2_PROVIDERS: JSON.stringify([
+        {
+          name: 'google',
+          client_id: 'cid',
+          client_secret: 'csecret',
+          redirect_uri: 'http://localhost:5173/user',
+        },
+      ]),
+    });
+
+    const req = new Request('http://localhost/oauth2/google/callback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: 'code-1', state }),
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(401);
+    const json = await res.json();
+    expect(json.error).toBe('UNAUTHORIZED');
+  });
+
+  it('completes oauth callback with provider-user link priority', async () => {
+    const state = 'state-ok';
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'tok' }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ sub: 'google-sub-1', email: 'linked@example.com', email_verified: true }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const env = createBaseEnv({
+      KV: createMockKV({
+        [`oauth:state:${state}`]: JSON.stringify({ provider: 'google', session_nonce: 'nonce-ok', code_verifier: 'verifier-ok' }),
+      }),
+      OAUTH2_PROVIDERS: JSON.stringify([
+        {
+          name: 'google',
+          client_id: 'cid',
+          client_secret: 'csecret',
+          redirect_uri: 'http://localhost:5173/user',
+          token_url: 'https://oauth2.example/token',
+          userinfo_url: 'https://oauth2.example/userinfo',
+        },
+      ]),
+      DB: createMockDB({
+        first: (sql, params) => {
+          if (sql.includes('FROM oauth_connections')) return { id: 7, user_id: 42 };
+          if (sql.includes('FROM users WHERE user_email = ?')) return null;
+          if (sql.includes('SELECT id, user_email FROM users WHERE id = ?')) {
+            return { id: Number(params[0]), user_email: 'linked@example.com' };
+          }
+          return null;
+        },
+        all: (sql) => {
+          if (sql.includes('FROM user_roles')) return [{ role_text: 'default' }];
+          return [];
+        },
+      }),
+    });
+
+    const req = new Request('http://localhost/oauth2/google/callback', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Cookie: 'tm_oauth_nonce=nonce-ok',
+      },
+      body: JSON.stringify({ code: 'ok-code', state }),
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.user.id).toBe(42);
+    expect(json.data.user.user_email).toBe('linked@example.com');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
+
+  it('allows passkey login when both counters are zero', async () => {
+    const email = 'passkey@example.com';
+    const challenge = 'challenge-0';
+    const rpId = 'localhost';
+    const origin = 'http://localhost';
+
+    const keyPair = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      true,
+      ['sign', 'verify']
+    );
+    const spki = await crypto.subtle.exportKey('spki', keyPair.publicKey);
+    const publicKey = toB64Url(new Uint8Array(spki));
+
+    const clientDataObj = {
+      type: 'webauthn.get',
+      challenge,
+      origin,
+    };
+    const clientDataRaw = new TextEncoder().encode(JSON.stringify(clientDataObj));
+    const clientDataB64 = toB64Url(clientDataRaw);
+    const rpIdHash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(rpId)));
+    const authData = new Uint8Array(37);
+    authData.set(rpIdHash, 0);
+    authData[32] = 0x05; // user present + user verified
+    // signCount is 0 by default for bytes 33..36
+
+    const clientHash = new Uint8Array(await crypto.subtle.digest('SHA-256', clientDataRaw));
+    const payload = new Uint8Array(authData.length + clientHash.length);
+    payload.set(authData, 0);
+    payload.set(clientHash, authData.length);
+    const signatureRaw = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keyPair.privateKey, payload);
+
+    const env = createBaseEnv({
+      APP_ORIGINS: origin,
+      KV: createMockKV({
+        [`passkey:login:${email}:${challenge}`]: '5',
+      }),
+      DB: createMockDB({
+        first: (sql, params) => {
+          if (sql.includes('FROM webauthn_credentials WHERE credential_id = ?')) {
+            return { user_id: 5, public_key: publicKey, counter: 0 };
+          }
+          if (sql.includes('SELECT id, user_email FROM users WHERE id = ?')) {
+            return { id: 5, user_email: email };
+          }
+          return null;
+        },
+        all: (sql) => {
+          if (sql.includes('FROM user_roles')) return [{ role_text: 'default' }];
+          return [];
+        },
+        run: () => ({ meta: { last_row_id: 1, changes: 1 } }),
+      }),
+    });
+
+    const req = new Request('http://localhost/passkey/login/complete', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+      },
+      body: JSON.stringify({
+        email,
+        credential_id: 'cred-1',
+        challenge,
+        client_data_json: clientDataB64,
+        authenticator_data: toB64Url(authData),
+        signature: toB64Url(new Uint8Array(signatureRaw)),
+      }),
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.user.user_email).toBe(email);
+  });
 });
+
+function toB64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}

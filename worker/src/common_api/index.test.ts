@@ -110,6 +110,158 @@ describe('common api send_mail and address_auth', () => {
     expect(json.success).toBe(false);
   });
 
+  it('lists sendbox entries for authenticated address', async () => {
+    const env = createBaseEnv({
+      DB: createMockDB({
+        first: (sql) => {
+          if (sql.includes('COUNT(*) as count FROM sendbox')) {
+            return { count: 2 };
+          }
+          return null;
+        },
+        all: (sql) => {
+          if (sql.includes('FROM sendbox')) {
+            return [
+              {
+                id: 10,
+                address: 'tmp@example.com',
+                subject: 'Hello',
+                sender: 'tmp@example.com',
+                recipient: 'recipient@example.com',
+                created_at: '2025-01-01',
+              },
+            ];
+          }
+          return [];
+        },
+      }),
+      KV: createMockKV(),
+    });
+    const token = await signAddressJWT(1, 'tmp@example.com', env);
+
+    const req = new Request('http://localhost/sendbox?page=1&limit=20', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(Array.isArray(json.data.sendbox)).toBe(true);
+    expect(json.data.pagination.total).toBe(2);
+  });
+
+  it('deletes sendbox entry with ownership check', async () => {
+    const env = createBaseEnv({
+      DB: createMockDB({
+        run: (sql) => {
+          if (sql.includes('DELETE FROM sendbox')) {
+            return { meta: { changes: 1 } };
+          }
+          return { meta: { changes: 0 } };
+        },
+      }),
+      KV: createMockKV(),
+    });
+    const token = await signAddressJWT(1, 'tmp@example.com', env);
+
+    const req = new Request('http://localhost/sendbox/10', {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.deleted).toBe(1);
+  });
+
+  it('returns not found for missing sendbox entry', async () => {
+    const env = createBaseEnv({
+      DB: createMockDB({
+        run: () => ({ meta: { changes: 0 } }),
+      }),
+      KV: createMockKV(),
+    });
+    const token = await signAddressJWT(1, 'tmp@example.com', env);
+
+    const req = new Request('http://localhost/sendbox/999', {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects attachment download without authorization', async () => {
+    const env = createBaseEnv({
+      DB: createMockDB({}),
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/mails/1/attachment/1', {
+      method: 'GET',
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(401);
+  });
+
+  it('downloads attachment for authorized owner when storage exists', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.close();
+      },
+    });
+
+    const env = createBaseEnv({
+      DB: createMockDB({
+        first: (sql) => {
+          if (sql.includes('FROM attachments a') && sql.includes('JOIN mails m')) {
+            return {
+              id: 1,
+              mail_id: 1,
+              filename: 'invoice.pdf',
+              storage_key: 'attachments/tmp@example.com/1/invoice.pdf',
+              size: 3,
+              content_type: 'application/pdf',
+              content_id: null,
+              is_inline: 0,
+            };
+          }
+          return null;
+        },
+      }),
+      KV: createMockKV(),
+      R2: {
+        get: vi.fn().mockResolvedValue({ body: stream }),
+      } as unknown as R2Bucket,
+    });
+    const token = await signAddressJWT(1, 'tmp@example.com', env);
+
+    const req = new Request('http://localhost/mails/1/attachment/1', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/pdf');
+    expect(res.headers.get('Content-Disposition')).toContain('invoice.pdf');
+  });
+
   it('uses Resend API when configured', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => '', json: async () => ({ id: 're_1' }) });
     vi.stubGlobal('fetch', fetchMock);

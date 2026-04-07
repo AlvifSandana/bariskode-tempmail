@@ -190,6 +190,14 @@
                   <n-icon><DocumentOutline /></n-icon>
                   <span>{{ att.filename || 'Attachment' }}</span>
                   <span class="attachment-size">{{ formatSize(att.size) }}</span>
+                  <n-button
+                    v-if="att.storage_key"
+                    size="tiny"
+                    tertiary
+                    @click="downloadAttachment(att.id, att.filename)"
+                  >
+                    Download
+                  </n-button>
                 </div>
               </n-list-item>
             </n-list>
@@ -236,6 +244,7 @@ import {
 import DOMPurify from 'dompurify';
 import { useMailStore } from '@/store/mail';
 import { useSettingsStore } from '@/store/settings';
+import { apiClient, getToken } from '@/api';
 import type { Mail } from '@/api';
 
 const router = useRouter();
@@ -347,6 +356,40 @@ function formatSize(bytes: number | null): string {
 
 function sanitizeHtml(html: string): string {
   return DOMPurify.sanitize(html);
+}
+
+function downloadAttachment(attachmentId: number, filename: string | null) {
+  if (!currentMailDetail.value) return;
+  const token = getToken();
+  if (!token) {
+    message.error('Session expired. Please recreate or restore your address.');
+    return;
+  }
+
+  const url = apiClient.getAttachmentDownloadUrl(currentMailDetail.value.id, attachmentId);
+  fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error('Attachment download failed');
+      }
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = filename || `attachment-${attachmentId}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+    })
+    .catch(() => {
+      message.error('Failed to download attachment');
+    });
 }
 
 function goToUser() {

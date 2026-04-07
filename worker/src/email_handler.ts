@@ -31,6 +31,7 @@ interface ProcessedAttachment {
   contentType: string;
   contentId: string | null;
   isInline: boolean;
+  content: Uint8Array | null;
 }
 
 interface NotificationData {
@@ -109,16 +110,19 @@ export async function handleEmail(
     const extractedText = extractBodyText(rawEmail);
     const aiExtraction = await extractImportantInfo(env, toAddress, rawEmail, extractedText);
 
-    // Process attachments (basic - store raw, mark has_attachment)
-    const hasAttachment = checkForAttachments(rawEmail);
+    // Process attachments metadata (basic extraction)
+    const parsedAttachments = buildAttachmentMetadata(rawEmail);
+    const hasAttachment = parsedAttachments.length > 0;
 
     // Determine if we should keep raw email
-    const shouldKeepRaw = !shouldRemoveRaw(env, rawSize, hasAttachment);
+    const maxAttachmentBytes = parsedAttachments.reduce((max, item) => Math.max(max, item.size || 0), 0);
+    const shouldKeepRaw = !shouldRemoveRaw(env, rawSize, hasAttachment, maxAttachmentBytes);
 
     // Build metadata
     const metadata = {
       has_attachment: hasAttachment,
-      attachment_count: hasAttachment ? 1 : 0,
+      attachment_count: parsedAttachments.length,
+      dropped_attachment_count: 0,
       ai_extraction: aiExtraction,
     };
 
@@ -133,6 +137,51 @@ export async function handleEmail(
       is_read: 0,
       metadata: JSON.stringify(metadata),
     });
+
+    if (hasAttachment) {
+      let attachmentIndex = 0;
+      const configuredMaxSize = Number(env.MAX_ATTACHMENT_SIZE || '5242880');
+      for (const attachment of parsedAttachments) {
+        let storageKey: string | null = null;
+        const exceedsMaxSize = configuredMaxSize > 0 && attachment.size > configuredMaxSize;
+
+        if (exceedsMaxSize) {
+          metadata.dropped_attachment_count += 1;
+        }
+
+        if (!exceedsMaxSize && env.R2 && attachment.content && attachment.content.length > 0) {
+          const safeAddress = toAddress.replace(/[^a-zA-Z0-9@._-]/g, '_');
+          const safeFilename = (attachment.filename || `attachment-${attachmentIndex}`)
+            .replace(/[^a-zA-Z0-9._-]/g, '_')
+            .slice(0, 120);
+          storageKey = `attachments/${safeAddress}/${mailId}/${Date.now()}-${attachmentIndex}-${safeFilename}`;
+
+          try {
+            await env.R2.put(storageKey, attachment.content, {
+              httpMetadata: {
+                contentType: attachment.contentType || 'application/octet-stream',
+              },
+            });
+          } catch (error) {
+            console.error('[Email] Failed to upload attachment to R2:', error);
+            storageKey = null;
+          }
+        }
+
+        await insertAndGetId(env.DB, 'attachments', {
+          mail_id: mailId,
+          address: toAddress,
+          filename: attachment.filename,
+          storage_key: storageKey,
+          size: attachment.size,
+          content_type: attachment.contentType,
+          content_id: attachment.contentId,
+          is_inline: attachment.isInline ? 1 : 0,
+        });
+
+        attachmentIndex++;
+      }
+    }
 
     console.log(`[Email] Stored mail id: ${mailId} for address: ${toAddress}`);
 
@@ -261,6 +310,99 @@ function checkForAttachments(rawEmail: string): boolean {
   return false;
 }
 
+function buildAttachmentMetadata(rawEmail: string): ProcessedAttachment[] {
+  const normalized = rawEmail.replace(/\r/g, '');
+  const boundaryMatch = normalized.match(/boundary="?([^";\n]+)"?/i);
+  const defaultAttachment: ProcessedAttachment = {
+    filename: 'attachment.bin',
+    storageKey: '',
+    size: 0,
+    contentType: 'application/octet-stream',
+    contentId: null,
+    isInline: false,
+    content: null,
+  };
+
+  if (!boundaryMatch) {
+    return checkForAttachments(rawEmail) ? [defaultAttachment] : [];
+  }
+
+  const boundary = boundaryMatch[1];
+  const parts = normalized.split(`--${boundary}`);
+  const attachments: ProcessedAttachment[] = [];
+
+  for (const part of parts) {
+    const lowered = part.toLowerCase();
+    const hasDisposition = lowered.includes('content-disposition: attachment') || lowered.includes('content-disposition: inline');
+    const hasName = lowered.includes('filename=');
+    if (!hasDisposition && !hasName) continue;
+
+    const filenameMatch = part.match(/filename\*?=(?:UTF-8''|"?)([^";\n]+)/i);
+    const contentTypeMatch = part.match(/content-type:\s*([^;\n]+)/i);
+    const contentIdMatch = part.match(/content-id:\s*<?([^>\n]+)>?/i);
+    const inline = lowered.includes('content-disposition: inline');
+
+    const rawFilename = filenameMatch ? filenameMatch[1].trim().replace(/"/g, '') : 'attachment.bin';
+    let safeFilename = rawFilename;
+    try {
+      safeFilename = decodeURIComponent(rawFilename);
+    } catch {
+      safeFilename = rawFilename;
+    }
+
+    const [headerSection, bodySectionRaw] = part.split('\n\n');
+    const bodySection = bodySectionRaw || '';
+    const encodingMatch = (headerSection || part).match(/content-transfer-encoding:\s*([^;\n]+)/i);
+    const encoding = encodingMatch ? encodingMatch[1].trim().toLowerCase() : '';
+    const content = decodeAttachmentBody(bodySection, encoding);
+
+    attachments.push({
+      filename: safeFilename,
+      storageKey: '',
+      size: content?.length || 0,
+      contentType: contentTypeMatch ? contentTypeMatch[1].trim() : 'application/octet-stream',
+      contentId: contentIdMatch ? contentIdMatch[1].trim() : null,
+      isInline: inline,
+      content,
+    });
+  }
+
+  if (attachments.length === 0 && checkForAttachments(rawEmail)) {
+    return [defaultAttachment];
+  }
+
+  return attachments;
+}
+
+function decodeAttachmentBody(body: string, encoding: string): Uint8Array | null {
+  const normalizedBody = body.trim();
+  if (!normalizedBody) return null;
+
+  if (encoding === 'base64') {
+    try {
+      const sanitized = normalizedBody.replace(/\s+/g, '');
+      const binary = atob(sanitized);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    } catch {
+      return null;
+    }
+  }
+
+  if (encoding === 'quoted-printable') {
+    const softBreakRemoved = normalizedBody.replace(/=\r?\n/g, '');
+    const decoded = softBreakRemoved.replace(/=([A-Fa-f0-9]{2})/g, (_, hex: string) =>
+      String.fromCharCode(parseInt(hex, 16))
+    );
+    return new TextEncoder().encode(decoded);
+  }
+
+  return new TextEncoder().encode(normalizedBody);
+}
+
 function extractBodyText(rawEmail: string): string | null {
   const normalized = rawEmail.replace(/\r/g, '');
   const parts = normalized.split('\n\n');
@@ -328,8 +470,20 @@ async function extractImportantInfo(env: Bindings, address: string, rawEmail: st
 function shouldRemoveRaw(
   env: Bindings,
   emailSize: number,
-  hasAttachment: boolean
+  hasAttachment: boolean,
+  maxAttachmentBytes: number
 ): boolean {
+  if (env.REMOVE_ALL_ATTACHMENT === 'true' && hasAttachment) {
+    return true;
+  }
+
+  if (env.REMOVE_EXCEED_SIZE_ATTACHMENT === 'true') {
+    const maxAttachmentSize = Number(env.MAX_ATTACHMENT_SIZE || '5242880');
+    if (maxAttachmentBytes > maxAttachmentSize && hasAttachment) {
+      return true;
+    }
+  }
+
   // Remove if too large and has attachments
   const maxRawSize = 500000; // 500KB
   return emailSize > maxRawSize && hasAttachment;
@@ -354,8 +508,7 @@ async function triggerNotifications(
     const forwardAddresses = env.FORWARD_ADDRESS_LIST.split(',').map(a => a.trim());
     for (const forwardTo of forwardAddresses) {
       if (forwardTo) {
-        // Forwarding requires email sending capability
-        console.log(`[Email] Would forward to: ${forwardTo}`);
+        promises.push(sendForwardMail(env, forwardTo, data));
       }
     }
   }
@@ -404,6 +557,36 @@ async function sendWebhook(env: Bindings, webhookUrl: string, data: Notification
     }
   } catch (error) {
     console.error('[Webhook] Error:', error);
+  }
+}
+
+async function sendForwardMail(env: Bindings, recipient: string, data: NotificationData): Promise<void> {
+  try {
+    if (!env.RESEND_API_KEY) {
+      console.log(`[Email] Skip forward to ${recipient}: RESEND_API_KEY not configured`);
+      return;
+    }
+
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      },
+      body: JSON.stringify({
+        from: data.address,
+        to: [recipient],
+        subject: data.subject || '(No Subject)',
+        text: data.text || `Forwarded email from ${data.sender}`,
+      }),
+    });
+
+    if (!response.ok) {
+      const detail = await response.text().catch(() => 'Unknown forward error');
+      console.error(`[Email] Forward failed to ${recipient}:`, detail);
+    }
+  } catch (error) {
+    console.error(`[Email] Forward error to ${recipient}:`, error);
   }
 }
 

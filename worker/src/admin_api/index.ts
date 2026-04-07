@@ -9,7 +9,12 @@ import {
   setSetting,
 } from '../utils/db';
 import { requireAdminAuth } from '../utils/admin_auth';
-import { checkRateLimit, RATE_LIMIT_PRESETS } from '../utils/rate_limit';
+import {
+  blacklistIP,
+  checkRateLimit,
+  RATE_LIMIT_PRESETS,
+  unblacklistIP,
+} from '../utils/rate_limit';
 import { generateRandomName, parseDomains, validateName } from '../utils/email';
 import { hashPassword } from '../utils/crypto';
 import type { AppBindings } from '../types/env';
@@ -401,6 +406,7 @@ app.post('/settings', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const settings = body.settings && typeof body.settings === 'object' ? body.settings : body;
+    const previousIpBlacklist = await getSetting<string[]>(c.env.DB, 'ip_blacklist', []);
 
     const incomingKeys = Object.keys(settings);
     const disallowedKeys = incomingKeys.filter((key) => !ALLOWED_SETTINGS_KEYS.has(key));
@@ -419,6 +425,26 @@ app.post('/settings', async (c) => {
       await setSetting(c.env.DB, key, value as string | object);
     }
 
+    if ('ip_blacklist' in settings) {
+      const incoming = Array.isArray(settings.ip_blacklist)
+        ? settings.ip_blacklist.map((item: unknown) => String(item))
+        : [];
+      const previousSet = new Set(previousIpBlacklist.map((ip) => String(ip).trim()).filter(Boolean));
+      const incomingSet = new Set(incoming.map((ip) => ip.trim()).filter(Boolean));
+
+      for (const ip of incomingSet) {
+        if (!previousSet.has(ip)) {
+          await blacklistIP(c.env.KV, ip, 365 * 24 * 60 * 60);
+        }
+      }
+
+      for (const ip of previousSet) {
+        if (!incomingSet.has(ip)) {
+          await unblacklistIP(c.env.KV, ip);
+        }
+      }
+    }
+
     return c.json({ success: true, data: { updated_keys: Object.keys(settings) } });
   } catch (error) {
     console.error('[Admin API] settings update error:', error);
@@ -435,6 +461,23 @@ app.post('/ip_blacklist', async (c) => {
   try {
     const body = await c.req.json().catch(() => ({}));
     const blacklist = Array.isArray(body.blacklist) ? body.blacklist.map((item: unknown) => String(item)) : [];
+    const previous = await getSetting<string[]>(c.env.DB, 'ip_blacklist', []);
+
+    const previousSet = new Set(previous.map((ip) => String(ip).trim()).filter(Boolean));
+    const nextSet = new Set(blacklist.map((ip) => ip.trim()).filter(Boolean));
+
+    for (const ip of nextSet) {
+      if (!previousSet.has(ip)) {
+        await blacklistIP(c.env.KV, ip, 365 * 24 * 60 * 60);
+      }
+    }
+
+    for (const ip of previousSet) {
+      if (!nextSet.has(ip)) {
+        await unblacklistIP(c.env.KV, ip);
+      }
+    }
+
     await setSetting(c.env.DB, 'ip_blacklist', blacklist);
     return c.json({ success: true, data: { blacklist } });
   } catch (error) {
@@ -517,7 +560,39 @@ app.post('/db_init', async (c) => {
     `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name ASC`
   );
 
-  return c.json({ success: true, data: { initialized: false, message: 'Schema initialization is manual in MVP', tables } });
+  const requiredTables = [
+    'address',
+    'mails',
+    'sendbox',
+    'users',
+    'user_address',
+    'user_roles',
+    'settings',
+    'attachments',
+    'webauthn_credentials',
+    'oauth_connections',
+  ];
+  const existingTables = new Set(tables.map((row) => row.name));
+  const missingCoreTables = requiredTables.filter((table) => !existingTables.has(table));
+
+  return c.json({
+    success: true,
+    data: {
+      mode: 'status_only',
+      initialized: missingCoreTables.length === 0,
+      message: 'Schema initialization/migration is manual in MVP',
+      tables,
+      required_tables: requiredTables,
+      missing_core_tables: missingCoreTables,
+      migration_hint_commands: [
+        'wrangler d1 execute temp-email-db --file=db/schema.sql',
+      ],
+      next_action:
+        missingCoreTables.length === 0
+          ? 'No action required'
+          : 'Run migration command above then re-check /admin_api/db_init',
+    },
+  });
 });
 
 export default app;

@@ -154,8 +154,8 @@ const canBindCurrentAddress = computed(() => !!getToken() && !!getAddress());
 async function bootstrapAfterLogin() {
   const refreshed = await apiClient.refreshUserToken();
   if (!refreshed.success || !refreshed.data) return false;
-  saveUserToken(refreshed.data.token, refreshed.data.user.user_email);
-  userToken.value = refreshed.data.token;
+  saveUserToken('', refreshed.data.user.user_email);
+  userToken.value = 'session';
   activeTab.value = 'dashboard';
   await Promise.all([refreshProfile(), refreshAddresses(), loadUserMails(1)]);
   return true;
@@ -169,8 +169,8 @@ async function handleLogin() {
       message.error(res.message || 'Login failed');
       return;
     }
-    saveUserToken(res.data.token, res.data.user.user_email);
-    userToken.value = res.data.token;
+    saveUserToken('', res.data.user.user_email);
+    userToken.value = 'session';
     message.success('Login successful');
     await bootstrapAfterLogin().catch(() => false);
     router.replace('/user');
@@ -189,8 +189,8 @@ async function handleRegister() {
       message.error(res.message || 'Registration failed');
       return;
     }
-    saveUserToken(res.data.token, res.data.user.user_email);
-    userToken.value = res.data.token;
+    saveUserToken('', res.data.user.user_email);
+    userToken.value = 'session';
     message.success('Registration successful');
     await bootstrapAfterLogin().catch(() => false);
     router.replace('/user');
@@ -229,8 +229,8 @@ async function tryOAuthCallback() {
       message.error(res.message || 'OAuth login failed');
       return false;
     }
-    saveUserToken(res.data.token, res.data.user.user_email);
-    userToken.value = res.data.token;
+    saveUserToken('', res.data.user.user_email);
+    userToken.value = 'session';
     message.success('OAuth login successful');
     await bootstrapAfterLogin().catch(() => false);
     return true;
@@ -369,8 +369,8 @@ async function handlePasskeyLogin() {
       return;
     }
 
-    saveUserToken(loginRes.data.token, loginRes.data.user.user_email);
-    userToken.value = loginRes.data.token;
+    saveUserToken('', loginRes.data.user.user_email);
+    userToken.value = 'session';
     message.success('Passkey login successful');
     await bootstrapAfterLogin().catch(() => false);
     router.replace('/user');

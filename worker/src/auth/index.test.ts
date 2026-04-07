@@ -137,7 +137,6 @@ describe('auth routes smoke tests', () => {
     const json = await res.json();
     expect(json.success).toBe(true);
     expect(json.data.user.user_email).toBe('user@example.com');
-    expect(typeof json.data.token).toBe('string');
     const setCookie = res.headers.get('set-cookie') || '';
     expect(setCookie).toContain('tm_user_session=');
     expect(setCookie).toContain('tm_user_csrf=');

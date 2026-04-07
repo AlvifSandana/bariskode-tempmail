@@ -86,8 +86,8 @@ Status implementasi terkini untuk Temp Email Service.
 - `bind_address` now derives `address_id` from verified `address_token` (client no longer needs to send `address_id`)
 
 ### Security Follow-up (Remaining)
-- CSRF defense-in-depth for cookie-based auth still needs explicit hardening layer (e.g., double-submit token/origin policy for state-changing endpoints)
-- Auth responses still include `token` in JSON for compatibility; optional removal/migration is pending
+- CSRF defense-in-depth telah diterapkan untuk cookie-based auth (origin/referer allowlist + double-submit token)
+- Auth responses user tidak lagi mengembalikan `token` di JSON; browser flow mengandalkan HttpOnly cookie session
 - Dependency security audit cadence and remediation tracking still pending
 
 ---

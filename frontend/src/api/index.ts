@@ -15,7 +15,6 @@ interface AuthUser {
 }
 
 interface AuthResponse {
-  token: string;
   user: AuthUser;
 }
 
@@ -378,8 +377,8 @@ export const apiClient = {
     });
   },
 
-  async refreshUserToken(): Promise<ApiResponse<{ token: string; refreshed: boolean; user: AuthUser }>> {
-    return authApi<{ token: string; refreshed: boolean; user: AuthUser }>('/auth/refresh', {
+  async refreshUserToken(): Promise<ApiResponse<{ refreshed: boolean; user: AuthUser }>> {
+    return authApi<{ refreshed: boolean; user: AuthUser }>('/auth/refresh', {
       method: 'POST',
     });
   },

@@ -86,8 +86,8 @@ Format: `[ ]` = belum, `[x]` = selesai, `[-]` = skip/tidak relevan.
 - [ ] Access password (private site mode)
 - [x] XSS sanitization pada HTML email render
 - [ ] Shadow DOM isolation untuk embed mode
-- [ ] CSRF defense-in-depth untuk cookie-based auth (double-submit token/origin policy)
-- [ ] Evaluasi hapus `token` dari JSON auth response (setelah migrasi klien aman)
+- [x] CSRF defense-in-depth untuk cookie-based auth (double-submit token/origin policy)
+- [x] Hapus `token` dari JSON auth response user flow (browser cookie session)
 - [ ] Dependency security audit rutin + tracking remediation
 
 ### Spam

@@ -547,7 +547,6 @@ app.post('/register', async (c) => {
     return c.json({
       success: true,
       data: {
-        token,
         user: {
           id: userId,
           user_email: email,
@@ -597,7 +596,6 @@ app.post('/login', async (c) => {
     return c.json({
       success: true,
       data: {
-        token,
         user: {
           id: user.id,
           user_email: user.user_email,
@@ -650,7 +648,6 @@ app.post('/refresh', async (c) => {
     return c.json({
       success: true,
       data: {
-        token: refreshedToken,
         refreshed: refreshedToken !== token,
         user: {
           id: payload.user_id,
@@ -829,10 +826,10 @@ async function handleOAuthCallback(providerNameInput: string, code: string, stat
   return {
     ok: true as const,
     status: 200,
+    token,
     body: {
       success: true,
       data: {
-        token,
         user: {
           id: userId,
           user_email: dbUser.user_email,
@@ -857,8 +854,8 @@ app.get('/oauth2/:provider/callback', async (c) => {
     const sessionNonce = String(cookies.tm_oauth_nonce || '');
     const result = await handleOAuthCallback(provider, code, state, sessionNonce, c.env);
     c.header('Set-Cookie', 'tm_oauth_nonce=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0', { append: true });
-    if (result.ok && result.body && (result.body as { data?: { token?: string } }).data?.token) {
-      setUserSessionCookie(c, (result.body as { data: { token: string } }).data.token);
+    if (result.ok && result.token) {
+      setUserSessionCookie(c, result.token);
     }
     return c.json(result.body, result.status);
   } catch (error) {
@@ -882,8 +879,8 @@ app.post('/oauth2/:provider/callback', async (c) => {
     const sessionNonce = String(cookies.tm_oauth_nonce || '');
     const result = await handleOAuthCallback(provider, code, state, sessionNonce, c.env);
     c.header('Set-Cookie', 'tm_oauth_nonce=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0', { append: true });
-    if (result.ok && result.body && (result.body as { data?: { token?: string } }).data?.token) {
-      setUserSessionCookie(c, (result.body as { data: { token: string } }).data.token);
+    if (result.ok && result.token) {
+      setUserSessionCookie(c, result.token);
     }
     return c.json(result.body, result.status);
   } catch (error) {
@@ -1214,7 +1211,6 @@ app.post('/passkey/login/complete', async (c) => {
     return c.json({
       success: true,
       data: {
-        token,
         user: {
           id: user.id,
           user_email: user.user_email,

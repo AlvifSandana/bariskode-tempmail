@@ -451,7 +451,7 @@ TLS_KEY_FILE=/certs/key.pem
 - Browser flow uses secure HttpOnly cookie `tm_user_session` (`Secure`, `SameSite=Lax`, `Path=/`)
 - User auth middleware accepts cookie token and still accepts `Authorization: Bearer` fallback
 - Auth endpoints that issue/refresh/login also set cookie; logout clears cookie
-- Current responses masih mengembalikan `token` di JSON untuk kompatibilitas klien
+- User auth responses tidak lagi mengembalikan `token` di JSON (browser flow cookie-only)
 
 ### 9.3 Admin Auth
 - `ADMIN_PASSWORDS` env var (comma-separated)

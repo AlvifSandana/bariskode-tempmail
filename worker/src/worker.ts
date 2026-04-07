@@ -38,12 +38,26 @@ app.use('*', async (c, next) => {
   }
 
   const origin = c.req.header('Origin');
+  if (!origin) {
+    return next();
+  }
+
   const allowedOrigin = getCorsOrigin(origin, c.env);
+  if (!allowedOrigin) {
+    return c.json(
+      {
+        success: false,
+        error: 'FORBIDDEN',
+        message: 'Origin is not allowed',
+      },
+      403
+    );
+  }
 
   return cors({
-    origin: allowedOrigin ?? undefined,
-    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowHeaders: ['Content-Type', 'Authorization'],
+    origin: allowedOrigin,
+    allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
     credentials: true,
   })(c, next);
 });

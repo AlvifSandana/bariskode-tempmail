@@ -10,6 +10,13 @@ describe('runtime config', () => {
     ]);
   });
 
+  it('normalizes and filters invalid origins', () => {
+    expect(parseAllowedOrigins('https://a.com/, not-a-url, https://b.com/path')).toEqual([
+      'https://a.com',
+      'https://b.com',
+    ]);
+  });
+
   it('fails on placeholder or weak secrets', () => {
     const result = validateRuntimeConfig(
       createBaseEnv({

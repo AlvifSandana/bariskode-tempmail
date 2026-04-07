@@ -7,6 +7,7 @@ import {
   signUserJWT,
   verifyJWT,
 } from '../utils/jwt';
+import { parseCookieHeader, randomCsrfToken, validateCookieCsrf } from '../utils/csrf';
 import { checkRateLimit, RATE_LIMIT_PRESETS } from '../utils/rate_limit';
 import { isValidLoginEmail } from '../utils/user_auth';
 import type { AppBindings } from '../types/env';
@@ -17,8 +18,35 @@ const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const PASSKEY_CHALLENGE_TTL_SECONDS = 5 * 60;
 const USER_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const USER_SESSION_COOKIE = 'tm_user_session';
+const USER_CSRF_COOKIE = 'tm_user_csrf';
 
 const app = new Hono<{ Bindings: AppBindings }>();
+
+const AUTH_CSRF_PROTECTED_PATHS = new Set([
+  '/refresh',
+  '/passkey/register/challenge',
+  '/passkey/register/complete',
+  '/logout',
+]);
+
+app.use('*', async (c, next) => {
+  const path = new URL(c.req.url).pathname;
+  const authPath = path.startsWith('/auth') ? path.slice('/auth'.length) || '/' : path;
+  if (!AUTH_CSRF_PROTECTED_PATHS.has(authPath)) {
+    return next();
+  }
+
+  const csrf = validateCookieCsrf({
+    method: c.req.method,
+    url: c.req.url,
+    headers: c.req,
+    allowedOriginsRaw: c.env.APP_ORIGINS,
+  });
+  if (!csrf.ok) {
+    return c.json(csrf.body, csrf.status);
+  }
+  await next();
+});
 
 type OAuth2ProviderConfig = {
   name: string;
@@ -152,17 +180,6 @@ function parseAllowedOriginsRaw(origins: string | undefined): string[] {
     .filter(Boolean);
 }
 
-function parseCookieHeader(cookieHeader: string | null | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  if (!cookieHeader) return out;
-  for (const part of cookieHeader.split(';')) {
-    const [rawKey, ...rest] = part.trim().split('=');
-    if (!rawKey) continue;
-    out[rawKey] = decodeURIComponent(rest.join('=') || '');
-  }
-  return out;
-}
-
 function getUserSessionToken(c: { req: { header(name: string): string | undefined } }): string | null {
   const authHeader = c.req.header('Authorization') ?? null;
   const bearer = extractBearerToken(authHeader);
@@ -173,15 +190,22 @@ function getUserSessionToken(c: { req: { header(name: string): string | undefine
 }
 
 function setUserSessionCookie(c: { header(name: string, value: string): void }, token: string) {
+  const csrfToken = randomCsrfToken();
   c.header(
     'Set-Cookie',
     `${USER_SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${USER_SESSION_TTL_SECONDS}`,
+    { append: true }
+  );
+  c.header(
+    'Set-Cookie',
+    `${USER_CSRF_COOKIE}=${encodeURIComponent(csrfToken)}; Secure; SameSite=Lax; Path=/; Max-Age=${USER_SESSION_TTL_SECONDS}`,
     { append: true }
   );
 }
 
 function clearUserSessionCookie(c: { header(name: string, value: string): void }) {
   c.header('Set-Cookie', `${USER_SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0`, { append: true });
+  c.header('Set-Cookie', `${USER_CSRF_COOKIE}=; Secure; SameSite=Lax; Path=/; Max-Age=0`, { append: true });
 }
 
 function getRequestOrigin(url: string): string {

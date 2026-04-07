@@ -35,6 +35,7 @@ Layanan temporary email gratis yang bisa kamu host sendiri di atas Cloudflare. T
 - Spam detection & blacklist/whitelist pengirim
 - XSS sanitization untuk HTML email
 - Access password (private site mode)
+- CSRF defense-in-depth untuk endpoint state-changing berbasis cookie (`Origin/Referer` allowlist via `APP_ORIGINS` + double-submit `tm_user_csrf` via header `X-CSRF-Token`)
 
 ### ⚙️ Admin Panel
 - Kelola address, user, settings, cleanup, dan DB init status
@@ -218,7 +219,7 @@ Di Cloudflare Dashboard → Email → Email Routing → Routing Rules:
 | `TELEGRAM_BOT_TOKEN` | ❌ | Telegram Bot token |
 | `WEBHOOK_URL` | ❌ | Webhook URL untuk notifikasi |
 | `FORWARD_ADDRESS_LIST` | ❌ | Comma-separated forward addresses |
-| `APP_ORIGINS` | ❌ | CORS allowlist origins (comma-separated) |
+| `APP_ORIGINS` | ❌ | CORS allowlist origins (comma-separated), juga dipakai untuk validasi `Origin/Referer` CSRF pada mutating endpoint cookie-auth |
 | `REMOVE_ALL_ATTACHMENT` | ❌ | Hapus raw mail jika email memiliki attachment |
 | `REMOVE_EXCEED_SIZE_ATTACHMENT` | ❌ | Hapus raw mail jika attachment melebihi batas |
 | `MAX_ATTACHMENT_SIZE` | ❌ | Batas ukuran attachment (bytes) |

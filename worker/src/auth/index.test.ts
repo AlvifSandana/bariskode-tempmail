@@ -138,6 +138,50 @@ describe('auth routes smoke tests', () => {
     expect(json.success).toBe(true);
     expect(json.data.user.user_email).toBe('user@example.com');
     expect(typeof json.data.token).toBe('string');
+    const setCookie = res.headers.get('set-cookie') || '';
+    expect(setCookie).toContain('tm_user_session=');
+    expect(setCookie).toContain('tm_user_csrf=');
+  });
+
+  it('rejects cookie-auth logout without csrf token header', async () => {
+    const env = createBaseEnv({
+      APP_ORIGINS: 'http://localhost',
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/logout', {
+      method: 'POST',
+      headers: {
+        Origin: 'http://localhost',
+        Cookie: 'tm_user_session=user-session; tm_user_csrf=csrf-cookie',
+      },
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe('FORBIDDEN');
+  });
+
+  it('allows cookie-auth logout with valid csrf token header', async () => {
+    const env = createBaseEnv({
+      APP_ORIGINS: 'http://localhost',
+      KV: createMockKV(),
+    });
+
+    const req = new Request('http://localhost/logout', {
+      method: 'POST',
+      headers: {
+        Origin: 'http://localhost',
+        Cookie: 'tm_user_session=user-session; tm_user_csrf=csrf-cookie',
+        'X-CSRF-Token': 'csrf-cookie',
+      },
+    });
+
+    const res = await authApp.fetch(req, env);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
   });
 
   it('returns 429 when auth rate limit is exceeded', async () => {

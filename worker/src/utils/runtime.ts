@@ -11,6 +11,14 @@ export function parseAllowedOrigins(origins: string | undefined): string[] {
   return origins
     .split(',')
     .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      try {
+        return new URL(item).origin;
+      } catch {
+        return '';
+      }
+    })
     .filter(Boolean);
 }
 

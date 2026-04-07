@@ -196,6 +196,25 @@ interface MailsResponse {
 const ADDRESS_TOKEN_KEY = 'temp_mail_token';
 const ADDRESS_KEY = 'temp_mail_address';
 const USER_EMAIL_KEY = 'temp_mail_user_email';
+const USER_CSRF_COOKIE = 'tm_user_csrf';
+
+function getCookie(name: string): string {
+  if (typeof document === 'undefined') return '';
+  const encodedName = `${encodeURIComponent(name)}=`;
+  const parts = document.cookie.split(';');
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (part.startsWith(encodedName)) {
+      const value = part.slice(encodedName.length);
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return value;
+      }
+    }
+  }
+  return '';
+}
 
 export function saveToken(token: string, address: string): void {
   localStorage.setItem(ADDRESS_TOKEN_KEY, token);
@@ -262,13 +281,23 @@ async function api<T>(
 }
 
 async function authApi<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
+  const method = String(options.method || 'GET').toUpperCase();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options.headers || {}) as Record<string, string>),
+  };
+
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const csrfToken = getCookie(USER_CSRF_COOKIE);
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
+  }
+
   const response = await fetch(`${AUTH_BASE}${endpoint}`, {
     ...options,
     credentials: 'include',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
+    headers,
   });
   return response.json();
 }

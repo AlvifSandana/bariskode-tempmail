@@ -3,6 +3,7 @@ import { deleteRows, insertAndGetId, query, queryOne } from '../utils/db';
 import { checkRateLimit, RATE_LIMIT_PRESETS } from '../utils/rate_limit';
 import { verifyJWT } from '../utils/jwt';
 import { requireUserAuth } from '../utils/user_auth';
+import { validateCookieCsrf } from '../utils/csrf';
 import type { AppBindings } from '../types/env';
 import type { Address, AddressJWT } from '../models/address';
 import type { UserJWT } from '../models/user';
@@ -15,6 +16,16 @@ type Variables = {
 const app = new Hono<{ Bindings: AppBindings; Variables: Variables }>();
 
 app.use('*', async (c, next) => {
+  const csrf = validateCookieCsrf({
+    method: c.req.method,
+    url: c.req.url,
+    headers: c.req,
+    allowedOriginsRaw: c.env.APP_ORIGINS,
+  });
+  if (!csrf.ok) {
+    return c.json(csrf.body, csrf.status);
+  }
+
   const unauthorized = await requireUserAuth(c as never);
   if (unauthorized) return unauthorized;
   await next();

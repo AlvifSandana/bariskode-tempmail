@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import commonApi from './index';
 import { createBaseEnv, createMockDB, createMockKV } from '../test/helpers';
 import { hashPassword } from '../utils/crypto';
-import { signAddressJWT } from '../utils/jwt';
+import { signAddressJWT, signUserJWT } from '../utils/jwt';
 
 describe('common api send_mail and address_auth', () => {
   beforeEach(() => {
@@ -103,6 +103,155 @@ describe('common api send_mail and address_auth', () => {
     const json = await res.json();
     expect(json.error).toBe('CAPTCHA_FAILED');
     vi.unstubAllGlobals();
+  });
+
+  it('rejects new_address for authenticated user when role domain is not allowed', async () => {
+    const env = createBaseEnv({
+      USER_ROLES: '[{"name":"vip","domains":["vip.example.com"],"prefix":"vip","max_address":10}]',
+      USER_DEFAULT_ROLE: 'vip',
+      DB: createMockDB({
+        first: (sql) => {
+          if (sql.includes('SELECT id, user_email FROM users WHERE id = ?')) {
+            return { id: 1, user_email: 'vip@example.com' };
+          }
+          if (sql.includes('SELECT COUNT(*) as count FROM user_address WHERE user_id = ?')) {
+            return { count: 0 };
+          }
+          if (sql.includes('SELECT value FROM settings WHERE key = ?')) {
+            return null;
+          }
+          if (sql.includes('SELECT id FROM address WHERE name = ?')) {
+            return null;
+          }
+          return null;
+        },
+        all: (sql) => {
+          if (sql.includes('SELECT role_text FROM user_roles WHERE user_id = ?')) {
+            return [{ role_text: 'vip' }];
+          }
+          return [];
+        },
+        run: () => ({ meta: { last_row_id: 1, changes: 1 } }),
+      }),
+      KV: createMockKV(),
+    });
+    const userToken = await signUserJWT(1, 'vip@example.com', ['vip'], env);
+
+    const req = new Request('http://localhost/new_address', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+        Authorization: `Bearer ${userToken}`,
+      },
+      body: JSON.stringify({ name: 'demo123', domain: 'example.com' }),
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(403);
+    const json = await res.json();
+    expect(json.error).toBe('FORBIDDEN');
+  });
+
+  it('uses role prefix and auto-binds when authenticated user creates address', async () => {
+    const env = createBaseEnv({
+      USER_ROLES: '[{"name":"vip","domains":["example.com"],"prefix":"vip","max_address":10}]',
+      USER_DEFAULT_ROLE: 'vip',
+      DB: createMockDB({
+        first: (sql) => {
+          if (sql.includes('SELECT id, user_email FROM users WHERE id = ?')) {
+            return { id: 1, user_email: 'vip@example.com' };
+          }
+          if (sql.includes('SELECT COUNT(*) as count FROM user_address WHERE user_id = ?')) {
+            return { count: 0 };
+          }
+          if (sql.includes('SELECT value FROM settings WHERE key = ?')) {
+            return null;
+          }
+          if (sql.includes('SELECT id FROM address WHERE name = ?')) {
+            return null;
+          }
+          return null;
+        },
+        all: (sql) => {
+          if (sql.includes('SELECT role_text FROM user_roles WHERE user_id = ?')) {
+            return [{ role_text: 'vip' }];
+          }
+          return [];
+        },
+        run: (sql) => {
+          if (sql.includes('INSERT INTO address')) {
+            return { meta: { last_row_id: 11, changes: 1 } };
+          }
+          if (sql.includes('INSERT INTO user_address')) {
+            return { meta: { last_row_id: 20, changes: 1 } };
+          }
+          return { meta: { last_row_id: 1, changes: 1 } };
+        },
+      }),
+      KV: createMockKV(),
+    });
+    const userToken = await signUserJWT(1, 'vip@example.com', ['vip'], env);
+
+    const req = new Request('http://localhost/new_address', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'CF-Connecting-IP': '127.0.0.1',
+        Authorization: `Bearer ${userToken}`,
+      },
+      body: JSON.stringify({ name: 'demo123', domain: 'example.com' }),
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.success).toBe(true);
+    expect(json.data.address).toBe('vip_demo123@example.com');
+  });
+
+  it('enforces csrf for cookie-authenticated new_address requests', async () => {
+    const env = createBaseEnv({
+      APP_ORIGINS: 'https://app.example.com',
+      USER_ROLES: '[{"name":"vip","domains":["example.com"],"prefix":"vip","max_address":10}]',
+      USER_DEFAULT_ROLE: 'vip',
+      DB: createMockDB({
+        first: (sql) => {
+          if (sql.includes('SELECT id, user_email FROM users WHERE id = ?')) {
+            return { id: 1, user_email: 'vip@example.com' };
+          }
+          if (sql.includes('SELECT COUNT(*) as count FROM user_address WHERE user_id = ?')) {
+            return { count: 0 };
+          }
+          if (sql.includes('SELECT value FROM settings WHERE key = ?')) {
+            return null;
+          }
+          return null;
+        },
+        all: (sql) => {
+          if (sql.includes('SELECT role_text FROM user_roles WHERE user_id = ?')) {
+            return [{ role_text: 'vip' }];
+          }
+          return [];
+        },
+      }),
+      KV: createMockKV(),
+    });
+    const userToken = await signUserJWT(1, 'vip@example.com', ['vip'], env);
+
+    const req = new Request('https://api.example.com/new_address', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://evil.example.com',
+        Cookie: `tm_user_session=${encodeURIComponent(userToken)}; tm_user_csrf=csrf-token`,
+        'X-CSRF-Token': 'csrf-token',
+      },
+      body: JSON.stringify({ name: 'demo123', domain: 'example.com' }),
+    });
+
+    const res = await commonApi.fetch(req, env);
+    expect(res.status).toBe(403);
   });
 
   it('rejects invalid address password', async () => {

@@ -10,8 +10,29 @@ export default defineConfig({
     }
   },
   server: {
+    // Forward all worker route groups in local dev
     proxy: {
       '/api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
+      '/open_api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
+      '/auth': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
+      '/user_api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
+      '/admin_api': {
+        target: 'http://localhost:8787',
+        changeOrigin: true
+      },
+      '/telegram_api': {
         target: 'http://localhost:8787',
         changeOrigin: true
       }

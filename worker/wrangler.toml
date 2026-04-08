@@ -9,14 +9,14 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "temp-email-db"
-database_id = "YOUR_D1_DATABASE_ID"  # Replace with: wrangler d1 create temp-email-db
+database_id = "b7fc2875-3722-49ab-81d7-f2ac008f74f7"  # Replace with: wrangler d1 create temp-email-db
 
 # ============================================
 # KV NAMESPACE BINDING
 # ============================================
 [[kv_namespaces]]
 binding = "KV"
-id = "YOUR_KV_NAMESPACE_ID"  # Replace with: wrangler kv:namespace create KV
+id = "432be738a6904543a5a6dae500609b1e"  # Replace with: wrangler kv:namespace create KV
 
 # ============================================
 # R2 BUCKET BINDING (Optional - for attachments)
@@ -36,10 +36,13 @@ id = "YOUR_KV_NAMESPACE_ID"  # Replace with: wrangler kv:namespace create KV
 # ============================================
 [vars]
 # Required Configuration
-DOMAINS = "mail.yourdomain.com,yourdomain.com"
+DOMAINS = "nekoma.eu.cc,nekofly.eu.cc"
 PREFIX = "tmp"
-ADMIN_PASSWORDS = "change-this-to-secure-password"
-JWT_SECRET = "change-this-to-random-secret-string-at-least-32-chars"
+# SECURITY NOTE:
+# Do not store secrets in wrangler.toml.
+# Set these via: wrangler secret put ADMIN_PASSWORDS / JWT_SECRET
+ADMIN_PASSWORDS = ""
+JWT_SECRET = ""
 
 # Address Configuration
 ENABLE_ADDRESS_PASSWORD = "true"

@@ -1,13 +1,16 @@
 import { Hono } from 'hono';
-import { deleteRows, insertAndGetId, query, queryOne } from '../utils/db';
+import { deleteRows, execute, query, queryOne } from '../utils/db';
 import { checkRateLimit, RATE_LIMIT_PRESETS } from '../utils/rate_limit';
 import { verifyJWT } from '../utils/jwt';
 import { requireUserAuth } from '../utils/user_auth';
 import { validateCookieCsrf } from '../utils/csrf';
+import { getAllowedDomainsForRolePolicy, resolveEffectiveRolePolicy } from '../utils/role_policy';
 import type { AppBindings } from '../types/env';
 import type { Address, AddressJWT } from '../models/address';
 import type { UserJWT } from '../models/user';
 import type { Mail } from '../models/mail';
+import { ERROR_CODES } from '../constants';
+import { parseDomains } from '../utils/email';
 
 type Variables = {
   user: UserJWT;
@@ -122,22 +125,87 @@ app.post('/bind_address', async (c) => {
       return c.json({ success: false, error: 'INVALID_REQUEST', message: 'Address already bound' }, 400);
     }
 
-    await insertAndGetId(c.env.DB, 'user_address', {
-      user_id: user.user_id,
-      address_id: addressId,
-    }).catch((error) => {
-      const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-      if (message.includes('unique')) {
-        throw new Error('ADDRESS_ALREADY_BOUND');
+    const policy = await resolveEffectiveRolePolicy(c.env, user.roles || []);
+    if (!policy) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.FORBIDDEN,
+          message: 'Role policy is not configured',
+        },
+        403
+      );
+    }
+
+    const addressLower = String(address.name || '').trim().toLowerCase();
+    const atIndex = addressLower.lastIndexOf('@');
+    const localPart = atIndex > 0 ? addressLower.slice(0, atIndex) : '';
+    const domainPart = atIndex > 0 ? addressLower.slice(atIndex + 1) : '';
+    const allowedDomains = getAllowedDomainsForRolePolicy(policy, parseDomains(c.env.DOMAINS));
+    if (!domainPart || !allowedDomains.includes(domainPart)) {
+      return c.json({ success: false, error: ERROR_CODES.FORBIDDEN, message: 'Address domain is not allowed for your role' }, 403);
+    }
+    if (policy.prefix && !localPart.startsWith(`${policy.prefix.toLowerCase()}_`)) {
+      return c.json({ success: false, error: ERROR_CODES.FORBIDDEN, message: 'Address prefix is not allowed for your role' }, 403);
+    }
+
+    const insertResult = await execute(
+      c.env.DB,
+      `INSERT INTO user_address (user_id, address_id)
+       SELECT ?, ?
+       WHERE (
+         SELECT COUNT(*) FROM user_address WHERE user_id = ?
+       ) < ?
+       AND NOT EXISTS (
+         SELECT 1 FROM user_address WHERE address_id = ?
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM user_address WHERE user_id = ? AND address_id = ?
+       )`,
+      [user.user_id, addressId, user.user_id, policy.max_address, addressId, user.user_id, addressId]
+    );
+
+    if ((insertResult.meta?.changes ?? 0) < 1) {
+      const ownerRow = await queryOne<{ user_id: number }>(
+        c.env.DB,
+        'SELECT user_id FROM user_address WHERE address_id = ? LIMIT 1',
+        [addressId]
+      );
+      if (ownerRow && ownerRow.user_id !== user.user_id) {
+        return c.json({ success: false, error: 'FORBIDDEN', message: 'Address already bound to another user' }, 403);
       }
-      throw error;
-    });
+
+      const ownBind = await queryOne<{ id: number }>(
+        c.env.DB,
+        'SELECT id FROM user_address WHERE user_id = ? AND address_id = ?',
+        [user.user_id, addressId]
+      );
+      if (ownBind) {
+        return c.json({ success: false, error: 'INVALID_REQUEST', message: 'Address already bound' }, 400);
+      }
+
+      const boundCountRow = await queryOne<{ count: number }>(
+        c.env.DB,
+        'SELECT COUNT(*) as count FROM user_address WHERE user_id = ?',
+        [user.user_id]
+      );
+      const boundCount = Number(boundCountRow?.count ?? 0);
+      if (boundCount >= policy.max_address) {
+        return c.json(
+          {
+            success: false,
+            error: ERROR_CODES.ROLE_LIMIT_REACHED,
+            message: `Role limit reached: maximum ${policy.max_address} addresses`,
+          },
+          403
+        );
+      }
+
+      return c.json({ success: false, error: 'FORBIDDEN', message: 'Address binding denied' }, 403);
+    }
 
     return c.json({ success: true, data: { address_id: addressId, address: address.name } });
   } catch (error) {
-    if (error instanceof Error && error.message === 'ADDRESS_ALREADY_BOUND') {
-      return c.json({ success: false, error: 'FORBIDDEN', message: 'Address already bound to another user' }, 403);
-    }
     console.error('[User API] bind_address error:', error);
     return c.json({ success: false, error: 'INTERNAL_ERROR', message: 'Failed to bind address' }, 500);
   }

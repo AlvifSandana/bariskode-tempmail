@@ -10,6 +10,7 @@ import {
 } from '../utils/db';
 import {
   signAddressJWT,
+  signUserJWT,
   verifyJWT,
   extractBearerToken,
 } from '../utils/jwt';
@@ -40,6 +41,8 @@ import {
 } from '../constants';
 import type { AppBindings } from '../types/env';
 import { extractTurnstileToken, verifyTurnstileToken } from '../utils/turnstile';
+import { parseCookieHeader, randomCsrfToken, validateCookieCsrf } from '../utils/csrf';
+import { getAllowedDomainsForRolePolicy, resolveEffectiveRolePolicy } from '../utils/role_policy';
 
 const app = new Hono<{ Bindings: AppBindings }>();
 const DUMMY_PASSWORD_HASH =
@@ -52,6 +55,58 @@ interface SendboxMail {
   sender: string | null;
   recipient: string;
   created_at: string;
+}
+
+type OptionalUserContext = {
+  userId: number;
+  userEmail: string | null;
+  roles: string[];
+};
+
+type OptionalUserContextResult = {
+  user: OptionalUserContext | null;
+  invalidTokenType: 'bearer' | 'cookie' | null;
+};
+
+async function resolveOptionalUserContext(c: { req: { header(name: string): string | undefined }; env: AppBindings }): Promise<OptionalUserContext | null> {
+  const authHeader = c.req.header('Authorization') ?? null;
+  const bearer = extractBearerToken(authHeader);
+  const cookieToken = parseCookieHeader(c.req.header('Cookie'))['tm_user_session'] || null;
+  const resolveByToken = async (token: string): Promise<OptionalUserContext | null> => {
+    const payload = await verifyJWT<{ user_id: number; type: string }>(token, c.env);
+    if (!payload || payload.type !== 'user' || !payload.user_id) return null;
+
+    const user = await queryOne<{ id: number; user_email: string | null }>(
+      c.env.DB,
+      'SELECT id, user_email FROM users WHERE id = ?',
+      [payload.user_id]
+    );
+    if (!user) return null;
+
+    const roleRows = await query<{ role_text: string }>(
+      c.env.DB,
+      'SELECT role_text FROM user_roles WHERE user_id = ? ORDER BY role_text ASC',
+      [user.id]
+    );
+
+    return {
+      userId: user.id,
+      userEmail: user.user_email,
+      roles: roleRows.map((row) => row.role_text),
+    };
+  };
+
+  if (cookieToken) {
+    const byCookie = await resolveByToken(cookieToken);
+    if (byCookie) return byCookie;
+  }
+
+  if (bearer) {
+    const byBearer = await resolveByToken(bearer);
+    if (byBearer) return byBearer;
+  }
+
+  return null;
 }
 
 // ==================== GET /api/settings ====================
@@ -81,6 +136,16 @@ app.get('/settings', async (c) => {
 // ==================== POST /api/new_address ====================
 app.post('/new_address', async (c) => {
   try {
+    const csrf = validateCookieCsrf({
+      method: c.req.method,
+      url: c.req.url,
+      headers: c.req,
+      allowedOriginsRaw: c.env.APP_ORIGINS,
+    });
+    if (!csrf.ok) {
+      return c.json(csrf.body, csrf.status);
+    }
+
     // Get client IP
     const ip = c.req.header('CF-Connecting-IP') || 'unknown';
 
@@ -198,35 +263,81 @@ app.post('/new_address', async (c) => {
       addressName = generateRandomName(8);
     }
 
-    // Determine domain
-    let selectedDomain: string;
-    const allowedDomains = parseDomains(c.env.DOMAINS);
+    const userContext = await resolveOptionalUserContext(c);
+    const rolePolicy = userContext ? await resolveEffectiveRolePolicy(c.env, userContext.roles || []) : null;
 
-    if (domain) {
-      // Validate requested domain
-      if (!isDomainAllowed(domain, c.env)) {
+    if (userContext && !rolePolicy) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.FORBIDDEN,
+          message: 'Role policy is not configured',
+        },
+        HTTP_STATUS.FORBIDDEN
+      );
+    }
+
+    if (userContext && rolePolicy) {
+      const ownedCount = await queryOne<{ count: number }>(
+        c.env.DB,
+        'SELECT COUNT(*) as count FROM user_address WHERE user_id = ?',
+        [userContext.userId]
+      );
+      const currentCount = Number(ownedCount?.count ?? 0);
+      if (currentCount >= rolePolicy.max_address) {
         return c.json(
           {
             success: false,
-            error: ERROR_CODES.FORBIDDEN,
-            message: 'Domain not allowed',
+            error: ERROR_CODES.ROLE_LIMIT_REACHED,
+            message: `Role limit reached: maximum ${rolePolicy.max_address} addresses`,
           },
           HTTP_STATUS.FORBIDDEN
         );
       }
-      selectedDomain = domain;
+    }
+
+    // Determine domain
+    let selectedDomain: string;
+    const allowedDomains = parseDomains(c.env.DOMAINS);
+    const roleAllowedDomains = rolePolicy ? getAllowedDomainsForRolePolicy(rolePolicy, allowedDomains) : allowedDomains;
+
+    if (rolePolicy && roleAllowedDomains.length === 0) {
+      return c.json(
+        {
+          success: false,
+          error: ERROR_CODES.FORBIDDEN,
+          message: 'Role does not allow any configured domain',
+        },
+        HTTP_STATUS.FORBIDDEN
+      );
+    }
+
+    const requestedDomain = String(domain || '').trim().toLowerCase();
+    if (requestedDomain) {
+      // Validate requested domain
+      if (!isDomainAllowed(requestedDomain, c.env) || (rolePolicy && !roleAllowedDomains.includes(requestedDomain))) {
+        return c.json(
+          {
+            success: false,
+            error: ERROR_CODES.FORBIDDEN,
+            message: rolePolicy ? 'Domain not allowed for your role' : 'Domain not allowed',
+          },
+          HTTP_STATUS.FORBIDDEN
+        );
+      }
+      selectedDomain = requestedDomain;
     } else {
       // Use first domain or default domain
       const defaultDomains = c.env.DEFAULT_DOMAINS
-        ? parseDomains(c.env.DEFAULT_DOMAINS)
-        : allowedDomains;
+        ? parseDomains(c.env.DEFAULT_DOMAINS).filter((item) => roleAllowedDomains.includes(item))
+        : roleAllowedDomains;
       
       const useFirst = c.env.CREATE_ADDRESS_DEFAULT_DOMAIN_FIRST === 'true';
-      selectedDomain = useFirst ? allowedDomains[0] : defaultDomains[0] || allowedDomains[0];
+      selectedDomain = useFirst ? roleAllowedDomains[0] : defaultDomains[0] || roleAllowedDomains[0];
     }
 
     // Build full address
-    const prefix = c.env.PREFIX || '';
+    const prefix = rolePolicy ? rolePolicy.prefix : (c.env.PREFIX || '');
     const fullAddress = prefix
       ? `${prefix}_${addressName}@${selectedDomain}`
       : `${addressName}@${selectedDomain}`;
@@ -273,8 +384,47 @@ app.post('/new_address', async (c) => {
       balance: 0,
     });
 
+    if (userContext && rolePolicy) {
+      const bindResult = await execute(
+        c.env.DB,
+        `INSERT INTO user_address (user_id, address_id)
+         SELECT ?, ?
+         WHERE (
+           SELECT COUNT(*) FROM user_address WHERE user_id = ?
+         ) < ?`,
+        [userContext.userId, addressId, userContext.userId, rolePolicy.max_address]
+      );
+
+      if ((bindResult.meta?.changes ?? 0) < 1) {
+        await deleteRows(c.env.DB, 'address', 'id = ?', [addressId]);
+        return c.json(
+          {
+            success: false,
+            error: ERROR_CODES.ROLE_LIMIT_REACHED,
+            message: `Role limit reached: maximum ${rolePolicy.max_address} addresses`,
+          },
+          HTTP_STATUS.FORBIDDEN
+        );
+      }
+    }
+
     // Generate JWT
     const token = await signAddressJWT(addressId, fullAddress, c.env);
+
+    if (userContext) {
+      const refreshedToken = await signUserJWT(userContext.userId, userContext.userEmail, userContext.roles, c.env);
+      const csrf = randomCsrfToken();
+      c.header(
+        'Set-Cookie',
+        `tm_user_session=${encodeURIComponent(refreshedToken)}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 30}`,
+        { append: true }
+      );
+      c.header(
+        'Set-Cookie',
+        `tm_user_csrf=${encodeURIComponent(csrf)}; Secure; SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 30}`,
+        { append: true }
+      );
+    }
 
     console.log(`[API] Created address: ${fullAddress} from IP: ${ip}`);
 

@@ -9,6 +9,7 @@ import {
   setSetting,
 } from '../utils/db';
 import { requireAdminAuth } from '../utils/admin_auth';
+import { validateCookieCsrf } from '../utils/csrf';
 import {
   blacklistIP,
   checkRateLimit,
@@ -105,6 +106,16 @@ app.use('*', async (c, next) => {
   const rate = await checkRateLimit(c.env.KV, `admin:${ip}`, RATE_LIMIT_PRESETS.ADMIN_API);
   if (!rate.allowed) {
     return c.json({ success: false, error: 'RATE_LIMITED', message: 'Too many requests', retry_after: rate.retryAfter }, 429);
+  }
+
+  const csrf = validateCookieCsrf({
+    method: c.req.method,
+    url: c.req.url,
+    headers: c.req,
+    allowedOriginsRaw: c.env.APP_ORIGINS,
+  });
+  if (!csrf.ok) {
+    return c.json(csrf.body, csrf.status);
   }
 
   const unauthorized = await requireAdminAuth(c as never);
